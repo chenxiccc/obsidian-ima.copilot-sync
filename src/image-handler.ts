@@ -1,7 +1,21 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
+import type { AttachmentPathMode, LinkFormat } from './settings';
 
 // 匹配 Markdown 图片语法：![alt](https://...) / Match Markdown image syntax
 const IMG_URL_REGEX = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+
+// ─── 附件处理选项 / Attachment processing options ────────────────────────────
+
+export interface AttachmentOptions {
+	/** 附件路径模式 / Attachment path mode */
+	pathMode: AttachmentPathMode;
+	/** subfolder 模式下的子文件夹名 / Subfolder name for subfolder mode */
+	subfolderName: string;
+	/** 图片链接格式 / Image link format */
+	linkFormat: LinkFormat;
+	/** 同步根目录（用于 subfolder/samename 模式）/ Sync root dir (for subfolder/samename modes) */
+	syncFolder: string;
+}
 
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────
 
@@ -9,16 +23,58 @@ export class ImageHandler {
 	constructor(private readonly vault: Vault) {}
 
 	/**
-	 * 处理笔记内容：下载所有外链图片，保存到 attachments 文件夹，替换链接为 Obsidian wiki 格式
-	 * Process note content: download all external images, save to attachments folder,
-	 * replace links with Obsidian wiki format
+	 * 根据模式解析附件文件夹的实际路径
+	 * Resolve the actual attachment folder path based on mode
 	 *
-	 * @param content           笔记原始内容 / Raw note content
-	 * @param attachmentFolder  附件文件夹路径（相对 vault 根）/ Attachment folder path (relative to vault root)
-	 * @returns 替换后的内容 / Processed content
+	 * @param noteFilePath  笔记在 vault 中的路径（如 ima/note.md）/ Note path in vault
+	 * @param opts          附件选项 / Attachment options
 	 */
-	async processContent(content: string, attachmentFolder: string): Promise<string> {
-		// 收集所有图片 URL / Collect all image URLs
+	resolveAttachmentFolder(noteFilePath: string, opts: AttachmentOptions): string {
+		const noteDir = noteFilePath.includes('/')
+			? noteFilePath.substring(0, noteFilePath.lastIndexOf('/'))
+			: '';
+		const noteBasename = noteFilePath
+			.replace(/^.*\//, '')   // 去掉目录部分 / Remove directory
+			.replace(/\.md$/, '');  // 去掉扩展名 / Remove extension
+
+		switch (opts.pathMode) {
+			case 'subfolder':
+				// ima目录下固定子文件夹，名称可自定义
+				// Fixed subfolder under sync dir, name is customizable
+				return normalizePath(`${opts.syncFolder}/${opts.subfolderName || 'attachments'}`);
+
+			case 'obsidian': {
+				// 跟随 Obsidian 全局附件路径设置 / Follow Obsidian global attachment path setting
+				const setting: string =
+					(this.vault as unknown as { getConfig(k: string): string }).getConfig('attachmentFolderPath')
+					?? 'attachments';
+				if (!setting || setting === '/') return normalizePath('/');
+				if (setting.startsWith('./')) {
+					// 相对路径：相对于笔记所在文件夹 / Relative to note's folder
+					return normalizePath(`${noteDir}/${setting.slice(2)}`);
+				}
+				// 绝对路径：相对 vault 根 / Absolute from vault root
+				return normalizePath(setting);
+			}
+
+			case 'samename':
+				// ima目录下与笔记同名的文件夹 / Folder named after note under sync dir
+				return normalizePath(`${opts.syncFolder}/${noteBasename}`);
+
+			default:
+				return normalizePath(`${opts.syncFolder}/attachments`);
+		}
+	}
+
+	/**
+	 * 处理笔记内容：下载所有外链图片，保存到附件文件夹，替换链接
+	 * Process note content: download all external images, save to attachment folder, replace links
+	 *
+	 * @param content       笔记原始内容 / Raw note content
+	 * @param noteFilePath  笔记在 vault 中的路径 / Note path in vault
+	 * @param opts          附件选项 / Attachment options
+	 */
+	async processContent(content: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
 		const matches: Array<{ full: string; alt: string; url: string }> = [];
 		let match: RegExpExecArray | null;
 		const regex = new RegExp(IMG_URL_REGEX.source, 'g');
@@ -33,10 +89,9 @@ export class ImageHandler {
 
 		if (matches.length === 0) return content;
 
-		// 确保附件文件夹存在 / Ensure attachment folder exists
+		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await this.ensureFolder(attachmentFolder);
 
-		// 逐个下载并替换 / Download and replace one by one
 		for (let i = 0; i < matches.length; i++) {
 			const { full, alt, url } = matches[i] ?? { full: '', alt: '', url: '' };
 			if (!url) continue;
@@ -51,10 +106,8 @@ export class ImageHandler {
 					await this.downloadImage(url, destPath);
 				}
 
-				// 替换为 Obsidian wiki 格式，只用文件名（Obsidian 自动解析）
-				// Replace with Obsidian wiki format, filename only (Obsidian resolves automatically)
-				const wikiLink = alt ? `![[${filename}|${alt}]]` : `![[${filename}]]`;
-				content = content.replace(full, wikiLink);
+				const link = this.formatLink(filename, destPath, noteFilePath, alt, opts.linkFormat);
+				content = content.replace(full, link);
 			} catch {
 				// 下载失败时保留原始链接，不中断整体同步
 				// Keep original link on download failure, don't interrupt overall sync
@@ -66,13 +119,13 @@ export class ImageHandler {
 	}
 
 	/**
-	 * 下载单张图片并返回 Obsidian wiki 链接
-	 * 若本地文件已存在则直接复用，不重复下载
-	 * Download a single image and return Obsidian wiki link.
-	 * Reuses existing local file if already downloaded.
+	 * 下载单张图片，保存到附件文件夹，返回格式化链接
+	 * Download a single image, save to attachment folder, return formatted link
 	 */
-	async downloadAndLink(url: string, attachmentFolder: string): Promise<string> {
+	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await this.ensureFolder(attachmentFolder);
+
 		const filename = this.urlToFilename(url, 0);
 		const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
@@ -82,24 +135,77 @@ export class ImageHandler {
 			await this.downloadImage(url, destPath);
 		}
 
-		return `![[${filename}]]`;
+		return this.formatLink(filename, destPath, noteFilePath, '', opts.linkFormat);
+	}
+
+	/**
+	 * 生成图片引用链接（wiki 或标准 Markdown）
+	 * Generate image reference link (wiki or standard Markdown)
+	 */
+	private formatLink(
+		filename: string,
+		destPath: string,
+		noteFilePath: string,
+		alt: string,
+		format: LinkFormat,
+	): string {
+		// 解析 auto 格式 / Resolve auto format
+		let resolved = format;
+		if (format === 'auto') {
+			const useMarkdown = (this.vault as unknown as { getConfig(k: string): boolean })
+				.getConfig('useMarkdownLinks') ?? false;
+			resolved = useMarkdown ? 'markdown' : 'wikilink';
+		}
+
+		if (resolved === 'wikilink') {
+			// Obsidian wiki 格式，只用文件名，Obsidian 自动解析
+			// Obsidian wiki format, filename only, Obsidian resolves automatically
+			return alt ? `![[${filename}|${alt}]]` : `![[${filename}]]`;
+		}
+
+		// 标准 Markdown 格式，计算相对路径 / Standard Markdown, calculate relative path
+		const noteDir = noteFilePath.includes('/')
+			? noteFilePath.substring(0, noteFilePath.lastIndexOf('/'))
+			: '';
+		const relPath = this.calcRelativePath(noteDir, destPath);
+		// 路径中空格等特殊字符需要编码 / Encode special characters in path segments
+		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
+		return `![${alt}](${encoded})`;
+	}
+
+	/**
+	 * 计算从 fromDir 到 toPath 的相对路径
+	 * Calculate relative path from fromDir to toPath
+	 */
+	private calcRelativePath(fromDir: string, toPath: string): string {
+		const fromParts = fromDir ? fromDir.split('/') : [];
+		const toParts = toPath.split('/');
+
+		let common = 0;
+		while (
+			common < fromParts.length &&
+			common < toParts.length &&
+			fromParts[common] === toParts[common]
+		) {
+			common++;
+		}
+
+		const ups = Array(fromParts.length - common).fill('..');
+		const downs = toParts.slice(common);
+		return [...ups, ...downs].join('/') || '.';
 	}
 
 	/** 从 URL 生成合法文件名 / Generate valid filename from URL */
 	private urlToFilename(url: string, index: number): string {
 		try {
 			const urlObj = new URL(url);
-			// 取 pathname 最后一段 / Get last segment of pathname
-			const pathname = urlObj.pathname;
-			const lastSegment = pathname.split('/').pop() ?? '';
-			// 去掉查询参数可能混入的内容 / Remove any query params mixed in
+			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
 			const cleanSegment = lastSegment.split('?')[0] ?? '';
 
 			if (cleanSegment && cleanSegment.includes('.')) {
 				return this.sanitizeFilename(cleanSegment);
 			}
 
-			// 无法从 URL 提取时用哈希命名 / Use hash when can't extract from URL
 			const ext = this.guessExtFromUrl(url);
 			return `img_${this.hashUrl(url)}${ext}`;
 		} catch {
@@ -150,6 +256,8 @@ export class ImageHandler {
 		console.log(`IMA Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
 
 		if (response.status >= 400) {
+			// 记录响应头和正文（最多 500 字符）以辅助诊断
+			// Log response headers and body (up to 500 chars) to help diagnose
 			const bodySnippet = response.text?.substring(0, 500) ?? '';
 			console.error(`IMA Sync: 图片下载失败 / Image download failed: HTTP ${response.status}, body: ${bodySnippet}`);
 			throw new Error(`HTTP ${response.status}`);

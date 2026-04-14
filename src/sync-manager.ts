@@ -1,5 +1,6 @@
 import { Vault, Notice, normalizePath, TFile } from 'obsidian';
 import type { ImaPluginSettings } from './settings';
+import type { AttachmentOptions } from './image-handler';
 import { ImaClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { JsonToMarkdown } from './json-to-md';
@@ -63,10 +64,41 @@ export class SyncManager {
 		}
 	}
 
+	/**
+	 * 迁移同步文件夹：将 oldFolder 重命名为 newFolder
+	 * Migrate sync folder: rename oldFolder to newFolder
+	 */
+	async migrateSyncFolder(oldFolder: string, newFolder: string): Promise<void> {
+		const old = normalizePath(oldFolder);
+		const neu = normalizePath(newFolder);
+		if (old === neu) return;
+
+		const oldExists = await this.vault.adapter.exists(old);
+		if (!oldExists) return; // 旧目录不存在，无需迁移 / Old dir doesn't exist, nothing to migrate
+
+		const newExists = await this.vault.adapter.exists(neu);
+		if (newExists) {
+			throw new Error(`目标文件夹 "${newFolder}" 已存在，无法迁移 / Target folder "${newFolder}" already exists`);
+		}
+
+		// vault.adapter.rename 对文件夹同样有效 / vault.adapter.rename also works on folders
+		await this.vault.adapter.rename(old, neu);
+	}
+
+	/** 构建附件选项 / Build attachment options */
+	private buildAttachmentOptions(): AttachmentOptions {
+		return {
+			pathMode: this.settings.attachmentPathMode,
+			subfolderName: this.settings.attachmentSubfolderName,
+			linkFormat: this.settings.linkFormat,
+			syncFolder: normalizePath(this.settings.syncFolder),
+		};
+	}
+
 	/** 核心同步逻辑 / Core sync logic */
 	private async doSync(): Promise<number> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
-		const attachmentFolder = normalizePath(`${syncFolder}/attachments`);
+		const opts = this.buildAttachmentOptions();
 
 		// 确保同步根目录存在 / Ensure sync root folder exists
 		await this.ensureFolder(syncFolder);
@@ -78,10 +110,10 @@ export class SyncManager {
 			const notes = await this.client.listAllNotes(this.settings.lastSyncTime);
 			for (const note of notes) {
 				try {
-					const rawJson = await this.client.getNoteContent(note.docid);
-					const processedContent = await this.jsonToMd.convert(rawJson, attachmentFolder);
 					const filename = this.sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
+					const rawJson = await this.client.getNoteContent(note.docid);
+					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts);
 					await this.writeNote(filePath, processedContent);
 					syncedCount++;
 				} catch (err) {
@@ -114,9 +146,9 @@ export class SyncManager {
 								console.warn(`IMA Sync: 无法从 media_id 提取 docId: ${item.media_id}`);
 								continue;
 							}
-							const rawJson = await this.client.getNoteContent(docId);
-							content = await this.jsonToMd.convert(rawJson, attachmentFolder);
 							filePath = normalizePath(`${kbFolder}/${filename}.md`);
+							const rawJson = await this.client.getNoteContent(docId);
+							content = await this.jsonToMd.convert(rawJson, filePath, opts);
 						} else if (item.media_type === 6 || item.media_type === 2) {
 							// ── 微信文章 / 网页：IMA API 不提供原始 URL 或正文，只记录标题作为占位
 							// ── WeChat article / Webpage: IMA API does not expose original URL or content, record title as placeholder
@@ -147,7 +179,7 @@ export class SyncManager {
 		}
 
 		// ── 修复残留外链图片 / Fix leftover external image links ─────────────
-		await this.fixPendingImages(syncFolder, attachmentFolder);
+		await this.fixPendingImages(syncFolder, opts);
 
 		// 更新最后同步时间 / Update last sync time
 		this.settings.lastSyncTime = Date.now();
@@ -160,7 +192,7 @@ export class SyncManager {
 	 * 扫描同步文件夹内所有 .md 文件，将其中残留的外链图片下载到本地并替换链接
 	 * Scan all .md files in sync folder, download leftover external image links
 	 */
-	private async fixPendingImages(syncFolder: string, attachmentFolder: string): Promise<void> {
+	private async fixPendingImages(syncFolder: string, opts: AttachmentOptions): Promise<void> {
 		const mdFiles = this.vault.getFiles().filter(f =>
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/'),
 		);
@@ -170,7 +202,7 @@ export class SyncManager {
 				const content = await this.vault.read(file);
 				if (!content.match(/!\[[^\]]*\]\(https?:\/\//)) continue;
 
-				const fixed = await this.imageHandler.processContent(content, attachmentFolder);
+				const fixed = await this.imageHandler.processContent(content, file.path, opts);
 				if (fixed !== content) {
 					await this.vault.modify(file, fixed);
 					console.log(`IMA Sync: 修复图片链接 / Fixed image links in: ${file.path}`);

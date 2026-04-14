@@ -86,4 +86,12 @@ export default class ImaPlugin extends Plugin {
 		this.syncManager.rebuildClient();
 		await this.syncManager.syncOnce();
 	}
+
+	/**
+	 * 迁移同步文件夹，供设置界面调用
+	 * Migrate sync folder, called from settings tab
+	 */
+	async migrateSyncFolder(oldFolder: string, newFolder: string): Promise<void> {
+		await this.syncManager.migrateSyncFolder(oldFolder, newFolder);
+	}
 }

@@ -4,6 +4,18 @@ import { ImaClient } from './ima-client';
 
 // ─── 设置数据结构 / Settings data structure ────────────────────────────────
 
+// ─── 附件路径模式 / Attachment path mode ────────────────────────────────────
+/** subfolder: 同步目录下固定子文件夹 / Fixed subfolder under sync dir
+ *  obsidian: 跟随 Obsidian 附件设置 / Follow Obsidian attachment settings
+ *  samename: 同步目录下与笔记同名的文件夹 / Folder named after note under sync dir */
+export type AttachmentPathMode = 'subfolder' | 'obsidian' | 'samename';
+
+// ─── 图片链接格式 / Image link format ────────────────────────────────────────
+/** auto: 跟随 Obsidian 设置 / Follow Obsidian settings
+ *  wikilink: Obsidian wiki 格式 ![[file]] / Obsidian wiki format
+ *  markdown: 标准 Markdown 格式 ![alt](path) / Standard Markdown format */
+export type LinkFormat = 'auto' | 'wikilink' | 'markdown';
+
 export interface ImaPluginSettings {
 	/** IMA OpenAPI Client ID */
 	clientId: string;
@@ -26,6 +38,12 @@ export interface ImaPluginSettings {
 	lastSyncTime: number;
 	/** 是否输出调试日志文件 / Whether to write debug log file */
 	enableDebugLog: boolean;
+	/** 附件保存路径模式 / Attachment save path mode */
+	attachmentPathMode: AttachmentPathMode;
+	/** 附件子文件夹名（subfolder 模式下使用）/ Attachment subfolder name (used in subfolder mode) */
+	attachmentSubfolderName: string;
+	/** 图片引用链接格式 / Image link format */
+	linkFormat: LinkFormat;
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
@@ -38,6 +56,9 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	knowledgeBaseId: '',
 	lastSyncTime: 0,
 	enableDebugLog: false,
+	attachmentPathMode: 'subfolder',
+	attachmentSubfolderName: 'attachments',
+	linkFormat: 'auto',
 };
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
@@ -275,15 +296,28 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('同步文件夹')
-			.setDesc('笔记同步到 vault 根目录下的文件夹名（默认：ima）')
+			.setDesc('笔记同步到 vault 根目录下的文件夹名（默认：ima）。修改后会自动迁移现有文件。')
 			.addText(text =>
 				text
 					.setPlaceholder('ima')
 					.setValue(this.plugin.settings.syncFolder)
 					.onChange(async value => {
-						const folder = value.trim() || 'ima';
-						this.plugin.settings.syncFolder = folder;
+						const newFolder = value.trim() || 'ima';
+						const oldFolder = this.plugin.settings.syncFolder;
+						if (newFolder === oldFolder) return;
+
+						try {
+							await this.plugin.migrateSyncFolder(oldFolder, newFolder);
+						} catch (err) {
+							new Notice(`文件夹迁移失败：${err instanceof Error ? err.message : String(err)}`);
+							// 回写旧值 / Reset to old value
+							text.setValue(oldFolder);
+							return;
+						}
+
+						this.plugin.settings.syncFolder = newFolder;
 						await this.plugin.saveSettings();
+						new Notice(`同步文件夹已从 "${oldFolder}" 迁移至 "${newFolder}"`);
 					}),
 			);
 
@@ -302,6 +336,59 @@ export class ImaSettingTab extends PluginSettingTab {
 						}
 					}),
 			);
+
+		// ── 附件路径设置 / Attachment path settings ──────────────────────────
+
+		// 子文件夹名输入行（仅 subfolder 模式显示）/ Subfolder name row (visible only in subfolder mode)
+		const subfolderNameSetting = new Setting(containerEl)
+			.setName('附件子文件夹名')
+			.setDesc('附件保存的子文件夹名称')
+			.addText(text =>
+				text
+					.setPlaceholder('attachments')
+					.setValue(this.plugin.settings.attachmentSubfolderName)
+					.onChange(async value => {
+						this.plugin.settings.attachmentSubfolderName = value.trim() || 'attachments';
+						await this.plugin.saveSettings();
+					}),
+			);
+		subfolderNameSetting.settingEl.style.display =
+			this.plugin.settings.attachmentPathMode === 'subfolder' ? '' : 'none';
+
+		new Setting(containerEl)
+			.setName('附件保存位置')
+			.setDesc('图片等附件下载后保存的位置')
+			.addDropdown(drop => {
+				drop
+					.addOption('subfolder', '同步目录下子文件夹（可自定义名称）')
+					.addOption('obsidian', '跟随 Obsidian 附件设置')
+					.addOption('samename', '同步目录下与笔记同名的文件夹')
+					.setValue(this.plugin.settings.attachmentPathMode)
+					.onChange(async value => {
+						this.plugin.settings.attachmentPathMode = value as AttachmentPathMode;
+						await this.plugin.saveSettings();
+						// 控制子文件夹名输入行的显示 / Show/hide subfolder name row
+						subfolderNameSetting.settingEl.style.display =
+							value === 'subfolder' ? '' : 'none';
+					});
+			});
+
+		// ── 图片链接格式 / Image link format ─────────────────────────────────
+
+		new Setting(containerEl)
+			.setName('图片引用格式')
+			.setDesc('同步后笔记中图片链接的格式')
+			.addDropdown(drop => {
+				drop
+					.addOption('auto', '跟随 Obsidian 设置')
+					.addOption('wikilink', 'Obsidian 格式  ![[image.png]]')
+					.addOption('markdown', 'Markdown 标准格式  ![alt](path)')
+					.setValue(this.plugin.settings.linkFormat)
+					.onChange(async value => {
+						this.plugin.settings.linkFormat = value as LinkFormat;
+						await this.plugin.saveSettings();
+					});
+			});
 
 		// ── 测试连接 / Test connection ──────────────────────────────────────
 
