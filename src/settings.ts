@@ -87,6 +87,18 @@ export class ImaSettingTab extends PluginSettingTab {
 			marginBottom: '16px',
 		});
 
+		// 消除 credBox 内所有 setting-item 的上下分割线和内边距
+		// Remove all borders and padding from setting-items inside credBox
+		const credBoxStyle = document.createElement('style');
+		credBoxStyle.textContent = `
+			.ima-cred-box .setting-item {
+				border-top: none !important;
+				border-bottom: none !important;
+			}
+		`;
+		document.head.appendChild(credBoxStyle);
+		credBox.addClass('ima-cred-box');
+
 		new Setting(credBox)
 			.setName('Client ID')
 			.setDesc('IMA OpenAPI 的 Client ID')
@@ -100,7 +112,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					});
 				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
 				text.inputEl.style.width = '400px';
-			}).settingEl.style.borderTop = 'none';
+			});
 
 		new Setting(credBox)
 			.setName('API Key')
@@ -117,7 +129,7 @@ export class ImaSettingTab extends PluginSettingTab {
 				text.inputEl.type = 'password';
 				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
 				text.inputEl.style.width = '400px';
-			}).settingEl.style.borderTop = 'none';
+			});
 
 		// ── 凭证获取说明 + 一键粘贴 / Credential instructions + paste button ──
 
@@ -175,7 +187,36 @@ export class ImaSettingTab extends PluginSettingTab {
 						this.display();
 						new Notice('凭证已填入');
 					}),
-			).settingEl.style.borderTop = 'none';
+			);
+
+		// ── 测试连接 / Test connection ──────────────────────────────────────
+
+		new Setting(credBox)
+			.setName('测试连接')
+			.setDesc('验证 Client ID 和 API Key 是否有效')
+			.addButton(btn =>
+				btn
+					.setButtonText('测试')
+					.onClick(async () => {
+						const { clientId, apiKey } = this.plugin.settings;
+						if (!clientId || !apiKey) {
+							new Notice('请先填写 Client ID 和 API Key');
+							return;
+						}
+						btn.setDisabled(true);
+						btn.setButtonText('测试中…');
+						try {
+							const client = new ImaClient(clientId, apiKey);
+							const notes = await client.listAllNotes();
+							new Notice(`连接成功，共找到 ${notes.length} 篇笔记`);
+						} catch (err) {
+							new Notice(`连接失败：${err instanceof Error ? err.message : String(err)}`);
+						} finally {
+							btn.setDisabled(false);
+							btn.setButtonText('测试');
+						}
+					}),
+			);
 
 		// ── 同步内容选择 / Sync content selection ──────────────────────────────
 
@@ -339,21 +380,8 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		// ── 附件路径设置 / Attachment path settings ──────────────────────────
 
-		// 子文件夹名输入行（仅 subfolder 模式显示）/ Subfolder name row (visible only in subfolder mode)
-		const subfolderNameSetting = new Setting(containerEl)
-			.setName('附件子文件夹名')
-			.setDesc('附件保存的子文件夹名称')
-			.addText(text =>
-				text
-					.setPlaceholder('attachments')
-					.setValue(this.plugin.settings.attachmentSubfolderName)
-					.onChange(async value => {
-						this.plugin.settings.attachmentSubfolderName = value.trim() || 'attachments';
-						await this.plugin.saveSettings();
-					}),
-			);
-		subfolderNameSetting.settingEl.style.display =
-			this.plugin.settings.attachmentPathMode === 'subfolder' ? '' : 'none';
+		// 把下拉和输入框合并到同一行 / Merge dropdown and text input into one row
+		let subfolderInput: HTMLInputElement | null = null;
 
 		new Setting(containerEl)
 			.setName('附件保存位置')
@@ -367,10 +395,26 @@ export class ImaSettingTab extends PluginSettingTab {
 					.onChange(async value => {
 						this.plugin.settings.attachmentPathMode = value as AttachmentPathMode;
 						await this.plugin.saveSettings();
-						// 控制子文件夹名输入行的显示 / Show/hide subfolder name row
-						subfolderNameSetting.settingEl.style.display =
-							value === 'subfolder' ? '' : 'none';
+						// 控制文件夹名输入框的显示 / Show/hide subfolder name input
+						if (subfolderInput) {
+							subfolderInput.style.display = value === 'subfolder' ? '' : 'none';
+						}
 					});
+			})
+			.addText(text => {
+				// 子文件夹名输入框，紧跟下拉框 / Subfolder name input, right after dropdown
+				text
+					.setPlaceholder('attachments')
+					.setValue(this.plugin.settings.attachmentSubfolderName)
+					.onChange(async value => {
+						this.plugin.settings.attachmentSubfolderName = value.trim() || 'attachments';
+						await this.plugin.saveSettings();
+					});
+				subfolderInput = text.inputEl;
+				subfolderInput.style.marginLeft = '8px';
+				subfolderInput.style.width = '120px';
+				subfolderInput.style.display =
+					this.plugin.settings.attachmentPathMode === 'subfolder' ? '' : 'none';
 			});
 
 		// ── 图片链接格式 / Image link format ─────────────────────────────────
@@ -389,35 +433,6 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
-
-		// ── 测试连接 / Test connection ──────────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('测试连接')
-			.setDesc('验证 Client ID 和 API Key 是否有效')
-			.addButton(btn =>
-				btn
-					.setButtonText('测试')
-					.onClick(async () => {
-						const { clientId, apiKey } = this.plugin.settings;
-						if (!clientId || !apiKey) {
-							new Notice('请先填写 Client ID 和 API Key');
-							return;
-						}
-						btn.setDisabled(true);
-						btn.setButtonText('测试中…');
-						try {
-							const client = new ImaClient(clientId, apiKey);
-							const notes = await client.listAllNotes();
-							new Notice(`连接成功，共找到 ${notes.length} 篇笔记`);
-						} catch (err) {
-							new Notice(`连接失败：${err instanceof Error ? err.message : String(err)}`);
-						} finally {
-							btn.setDisabled(false);
-							btn.setButtonText('测试');
-						}
-					}),
-			);
 
 		// ── 手动同步 / Manual sync ──────────────────────────────────────────
 
