@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-ima-sync",
+	"name": "IMA Sync",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Sync notes from IMA personal knowledge base to Obsidian",
+	"author": "",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}
