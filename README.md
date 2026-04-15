@@ -25,7 +25,9 @@
 
 ### 安装方法
 
-目前需要手动安装：
+方法1：通过Brat安装。
+
+方法2：手动安装：
 
 1. 前往 [Releases](https://github.com/chenxiccc/obsidian-ima.copilot-sync/releases) 下载最新版本的 `main.js` 和 `manifest.json`
 2. 在 vault 的 `.obsidian/plugins/` 目录下创建 `obsidian-ima-sync` 文件夹
@@ -49,20 +51,20 @@
 
 #### 3. 选择同步内容
 
-| 设置项 | 说明 |
-|--------|------|
-| 同步 IMA 笔记 | 同步 IMA 个人笔记本中的所有笔记 |
-| 同步知识库 | 开启后选择要同步的知识库（仅支持笔记类型条目） |
-| 同步文件夹 | 笔记保存到 vault 内的哪个文件夹（默认：`ima`） |
-| 同步间隔 | 自动同步的时间间隔（分钟，默认 60） |
+| 设置项        | 说明                                             |
+| ------------- | ------------------------------------------------ |
+| 同步 IMA 笔记 | 同步 IMA 个人笔记本中的所有笔记                  |
+| 同步知识库    | 开启后选择要同步的知识库（仅支持笔记类型条目）   |
+| 同步文件夹    | 笔记保存到 vault 内的哪个文件夹（默认：`ima`） |
+| 同步间隔      | 自动同步的时间间隔（分钟，默认 60）              |
 
 #### 4. 附件设置
 
-| 模式 | 说明 |
-|------|------|
+| 模式               | 说明                                                         |
+| ------------------ | ------------------------------------------------------------ |
 | 同步目录下子文件夹 | 附件统一保存到 `<同步文件夹>/attachments/`（可自定义名称） |
-| 跟随 Obsidian 设置 | 使用 Obsidian 全局附件设置 |
-| 与笔记同名文件夹 | 每篇笔记的附件保存到与笔记同名的文件夹中 |
+| 跟随 Obsidian 设置 | 使用 Obsidian 全局附件设置                                   |
+| 与笔记同名文件夹   | 每篇笔记的附件保存到与笔记同名的文件夹中                     |
 
 ### 已知限制
 
@@ -129,20 +131,20 @@ Click **「测试」** to verify the connection.
 
 #### 3. Choose what to sync
 
-| Setting | Description |
-|---------|-------------|
-| Sync IMA Notes | Sync all notes from your IMA personal notebook |
+| Setting             | Description                                                       |
+| ------------------- | ----------------------------------------------------------------- |
+| Sync IMA Notes      | Sync all notes from your IMA personal notebook                    |
 | Sync Knowledge Base | Enable and select a knowledge base to sync (note-type items only) |
-| Sync Folder | Vault folder where notes are saved (default: `ima`) |
-| Sync Interval | Auto-sync interval in minutes (default: 60) |
+| Sync Folder         | Vault folder where notes are saved (default:`ima`)              |
+| Sync Interval       | Auto-sync interval in minutes (default: 60)                       |
 
 #### 4. Attachment settings
 
-| Mode | Description |
-|------|-------------|
+| Mode                     | Description                                                             |
+| ------------------------ | ----------------------------------------------------------------------- |
 | Subfolder under sync dir | Attachments saved to `<sync-folder>/attachments/` (customizable name) |
-| Follow Obsidian settings | Uses Obsidian's global attachment settings |
-| Same-name folder | Each note's attachments saved in a folder named after the note |
+| Follow Obsidian settings | Uses Obsidian's global attachment settings                              |
+| Same-name folder         | Each note's attachments saved in a folder named after the note          |
 
 ### Known Limitations
 
