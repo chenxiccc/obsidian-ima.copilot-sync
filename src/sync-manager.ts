@@ -114,7 +114,7 @@ export class SyncManager {
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const rawJson = await this.client.getNoteContent(note.docid);
 					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts);
-					await this.writeNote(filePath, processedContent);
+					await this.writeNote(filePath, processedContent, opts);
 					syncedCount++;
 				} catch (err) {
 					console.warn(`IMA Sync: 笔记 "${note.title}" 同步失败`, err);
@@ -169,7 +169,7 @@ export class SyncManager {
 							continue;
 						}
 
-						await this.writeNote(filePath, content);
+						await this.writeNote(filePath, content, opts);
 						syncedCount++;
 					} catch (err) {
 						console.warn(`IMA Sync: 知识库条目 "${item.title}" 同步失败`, err);
@@ -213,13 +213,79 @@ export class SyncManager {
 		}
 	}
 
-	/** 写入或更新笔记文件 / Write or update note file */
-	private async writeNote(filePath: string, content: string): Promise<void> {
+	/**
+	 * 写入或更新笔记文件，更新后清理孤儿图片
+	 * Write or update note file, then clean up orphan images
+	 */
+	private async writeNote(filePath: string, content: string, opts: AttachmentOptions): Promise<void> {
 		const existing = this.vault.getFileByPath(filePath);
 		if (existing instanceof TFile) {
+			// 读取旧内容，提取旧图片路径集合
+			// Read old content and extract old image paths
+			const oldContent = await this.vault.read(existing);
+			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
+
 			await this.vault.modify(existing, content);
+
+			// 提取新图片路径，对比差集并清理孤儿文件
+			// Extract new image paths, diff and clean orphan files
+			const newPaths = new Set(this.imageHandler.extractLocalImagePaths(content, filePath, opts));
+			const orphans = oldPaths.filter(p => !newPaths.has(p));
+			if (orphans.length > 0) {
+				await this.cleanOrphanImages(orphans, filePath);
+			}
 		} else {
 			await this.vault.create(filePath, content);
+		}
+	}
+
+	/**
+	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
+	 * Check image paths and delete files no longer referenced by any synced note
+	 *
+	 * @param imagePaths  待检查的图片 vault 路径列表 / List of image vault paths to check
+	 * @param skipFile    已在内存中更新、无需重复读取的笔记路径 / Note path already updated in memory, skip re-reading
+	 */
+	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		// 获取同步文件夹下所有 md 文件（排除刚写入的那篇）
+		// Get all md files under sync folder (excluding the just-written note)
+		const mdFiles = this.vault.getFiles().filter(f =>
+			f.extension === 'md' && f.path.startsWith(syncFolder + '/') && f.path !== skipFile,
+		);
+
+		for (const imgPath of imagePaths) {
+			try {
+				const exists = await this.vault.adapter.exists(imgPath);
+				if (!exists) continue;
+
+				// 搜索是否还有其他笔记引用此图片
+				// Check if any other note still references this image
+				const filename = imgPath.split('/').pop() ?? '';
+				let stillReferenced = false;
+
+				for (const file of mdFiles) {
+					const fileContent = await this.vault.read(file);
+					// wikilink 匹配文件名，markdown 格式匹配编码后路径片段
+					// Match filename for wikilink, encoded path segment for markdown format
+					if (fileContent.includes(`[[${filename}]]`) ||
+						fileContent.includes(`[[${filename}|`) ||
+						fileContent.includes(`(${encodeURIComponent(filename)})`) ||
+						fileContent.includes(`/${encodeURIComponent(filename)})`) ||
+						fileContent.includes(`(${filename})`) ||
+						fileContent.includes(`/${filename})`)) {
+						stillReferenced = true;
+						break;
+					}
+				}
+
+				if (!stillReferenced) {
+					await this.vault.adapter.remove(imgPath);
+					console.log(`IMA Sync: 删除孤儿图片 / Removed orphan image: ${imgPath}`);
+				}
+			} catch (err) {
+				console.warn(`IMA Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);
+			}
 		}
 	}
 

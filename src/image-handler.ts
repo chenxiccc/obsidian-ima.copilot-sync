@@ -119,6 +119,52 @@ export class ImageHandler {
 	}
 
 	/**
+	 * 解析 Markdown 内容中所有本地图片的 vault 路径
+	 * Parse all local image vault paths from Markdown content
+	 *
+	 * 支持两种格式 / Supports two formats:
+	 *   - wikilink:  ![[filename.png]] 或 ![[filename.png|alt]]
+	 *   - markdown:  ![alt](relative/path.png)（跳过 http/https 外链）
+	 *
+	 * @param content       笔记 Markdown 内容 / Note Markdown content
+	 * @param noteFilePath  笔记在 vault 中的路径（用于解析相对路径）/ Note path in vault (for resolving relative paths)
+	 * @param opts          附件选项（用于推断 wikilink 的完整路径）/ Attachment options (for inferring wikilink full path)
+	 * @returns             vault 内的完整路径列表 / List of full paths within vault
+	 */
+	extractLocalImagePaths(content: string, noteFilePath: string, opts: AttachmentOptions): string[] {
+		const paths: string[] = [];
+
+		// 解析 wikilink 格式：![[filename.png]] 或 ![[filename.png|alt]]
+		// Parse wikilink format: ![[filename.png]] or ![[filename.png|alt]]
+		const wikilinkRegex = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+		let m: RegExpExecArray | null;
+		while ((m = wikilinkRegex.exec(content)) !== null) {
+			const raw = (m[1] ?? '').trim();
+			if (!raw) continue;
+			// wikilink 只存文件名，用当前 opts 推断附件文件夹
+			// wikilink stores filename only; infer attachment folder from current opts
+			const folder = this.resolveAttachmentFolder(noteFilePath, opts);
+			paths.push(normalizePath(`${folder}/${raw}`));
+		}
+
+		// 解析 Markdown 格式本地图片：![alt](path)，跳过外链
+		// Parse Markdown format local images: ![alt](path), skip external links
+		const mdLocalRegex = /!\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g;
+		while ((m = mdLocalRegex.exec(content)) !== null) {
+			const encoded = (m[1] ?? '').trim();
+			if (!encoded) continue;
+			// URL 解码后计算绝对路径 / URL-decode then resolve to absolute path
+			const decoded = encoded.split('/').map(seg => decodeURIComponent(seg)).join('/');
+			const noteDir = noteFilePath.includes('/')
+				? noteFilePath.substring(0, noteFilePath.lastIndexOf('/'))
+				: '';
+			paths.push(normalizePath(noteDir ? `${noteDir}/${decoded}` : decoded));
+		}
+
+		return paths;
+	}
+
+	/**
 	 * 下载单张图片，保存到附件文件夹，返回格式化链接
 	 * Download a single image, save to attachment folder, return formatted link
 	 */

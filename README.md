@@ -8,6 +8,10 @@
 
 将腾讯 [IMA](https://ima.qq.com) 个人笔记和知识库同步到 Obsidian vault 的插件。
 
+> **⚠ 单向同步**：本插件仅支持 **IMA → Obsidian** 单向同步。在 Obsidian 中对笔记做的任何修改**不会**同步回 IMA，每次同步会用 IMA 服务端内容覆盖本地文件。
+>
+> **知识库同步限制**：知识库中的笔记类型条目可完整同步；网页书签、微信文章、PDF、Word 等非笔记类型条目**仅同步标题**，无法获取原文（IMA API 不提供此能力）。
+
 ### 功能特性
 
 - **个人笔记同步**：将 IMA 笔记本中的所有笔记自动下载到 Obsidian
@@ -83,6 +87,10 @@ npm run build
 ## English
 
 An Obsidian plugin to sync notes from [Tencent IMA](https://ima.qq.com) personal notebook and knowledge base into your Obsidian vault.
+
+> **⚠ One-way sync only**: This plugin syncs **IMA → Obsidian** only. Any edits made in Obsidian will **not** be synced back to IMA — each sync overwrites local files with the content from IMA.
+>
+> **Knowledge base limitations**: Note-type items are fully synced. Other item types — webpage bookmarks, WeChat articles, PDFs, Word documents, etc. — **sync title only**; full content is unavailable due to IMA API restrictions.
 
 ### Features
 
