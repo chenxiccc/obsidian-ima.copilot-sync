@@ -1,0 +1,70 @@
+# 当 manifest.json 的版本号变更时，自动构建并发布到 GitHub Releases
+# Automatically build and publish to GitHub Releases when manifest.json version changes
+
+name: Release Obsidian Plugin
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - manifest.json
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 从 manifest.json 读取版本号 / Read version from manifest.json
+      - name: Get version
+        id: version
+        run: echo "version=$(jq -r '.version' manifest.json)" >> "$GITHUB_OUTPUT"
+
+      # 检查该版本的 Release 是否已存在，避免重复发布
+      # Check if a release for this version already exists to avoid duplicates
+      - name: Check for existing release
+        id: check
+        run: |
+          if gh release view "${{ steps.version.outputs.version }}" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: steps.check.outputs.exists == 'false'
+        run: npm ci
+
+      # 生产构建（含 tsc 类型检查）/ Production build (includes tsc type check)
+      - name: Build plugin
+        if: steps.check.outputs.exists == 'false'
+        run: npm run build
+
+      # 创建 Release 并上传 main.js 和 manifest.json
+      # Create Release and upload main.js and manifest.json
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            main.js
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
