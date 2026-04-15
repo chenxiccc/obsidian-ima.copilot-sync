@@ -3,3 +3,7 @@ main.js
 *.js.map
 .DS_Store
 ima-debug.log
+docs/
+CLAUDE.md
+.claude/
+.playwright-mcp/
