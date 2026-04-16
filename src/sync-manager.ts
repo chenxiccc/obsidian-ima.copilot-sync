@@ -205,7 +205,7 @@ export class SyncManager {
 				const fixed = await this.imageHandler.processContent(content, file.path, opts);
 				if (fixed !== content) {
 					await this.vault.modify(file, fixed);
-					console.log(`IMA Sync: 修复图片链接 / Fixed image links in: ${file.path}`);
+					console.debug(`IMA Sync: 修复图片链接 / Fixed image links in: ${file.path}`);
 				}
 			} catch (err) {
 				console.warn(`IMA Sync: 修复图片链接失败 / Failed to fix image links in ${file.path}:`, err);
@@ -281,7 +281,7 @@ export class SyncManager {
 
 				if (!stillReferenced) {
 					await this.vault.adapter.remove(imgPath);
-					console.log(`IMA Sync: 删除孤儿图片 / Removed orphan image: ${imgPath}`);
+					console.debug(`IMA Sync: 删除孤儿图片 / Removed orphan image: ${imgPath}`);
 				}
 			} catch (err) {
 				console.warn(`IMA Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);

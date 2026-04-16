@@ -79,25 +79,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		// ── 认证凭证（灰色分组框）/ Credentials (grouped box) ─────────────────
 
-		const credBox = containerEl.createDiv();
-		Object.assign(credBox.style, {
-			background: 'var(--background-secondary)',
-			borderRadius: '8px',
-			padding: '4px 0',
-			marginBottom: '16px',
-		});
-
-		// 消除 credBox 内所有 setting-item 的上下分割线和内边距
-		// Remove all borders and padding from setting-items inside credBox
-		const credBoxStyle = document.createElement('style');
-		credBoxStyle.textContent = `
-			.ima-cred-box .setting-item {
-				border-top: none !important;
-				border-bottom: none !important;
-			}
-		`;
-		document.head.appendChild(credBoxStyle);
-		credBox.addClass('ima-cred-box');
+		const credBox = containerEl.createDiv({ cls: 'ima-cred-box' });
 
 		new Setting(credBox)
 			.setName('Client ID')
@@ -111,7 +93,7 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
-				text.inputEl.style.width = '400px';
+				text.inputEl.addClass('ima-input-wide');
 			});
 
 		new Setting(credBox)
@@ -128,7 +110,7 @@ export class ImaSettingTab extends PluginSettingTab {
 				// 隐藏输入内容 / Hide input content
 				text.inputEl.type = 'password';
 				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
-				text.inputEl.style.width = '400px';
+				text.inputEl.addClass('ima-input-wide');
 			});
 
 		// ── 凭证获取说明 + 一键粘贴 / Credential instructions + paste button ──
@@ -254,22 +236,15 @@ export class ImaSettingTab extends PluginSettingTab {
 			);
 
 		// 知识库列表容器（默认隐藏）/ Knowledge base list container (hidden by default)
-		const kbListContainer = containerEl.createDiv({ cls: 'ima-kb-list' });
-		kbListContainer.style.display = 'none';
-		kbListContainer.style.marginLeft = '0';
-		kbListContainer.style.marginBottom = '12px';
+		const kbListContainer = containerEl.createDiv({ cls: 'ima-kb-list ima-hidden' });
 
 		/** 渲染知识库选项列表 / Render knowledge base option list */
 		const renderKbList = (bases: Array<{ id: string; name: string }>) => {
 			kbListContainer.empty();
-			kbListContainer.style.display = 'block';
+			kbListContainer.removeClass('ima-hidden');
 
 			for (const base of bases) {
 				const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
-				row.style.display = 'flex';
-				row.style.alignItems = 'center';
-				row.style.gap = '8px';
-				row.style.padding = '4px 0';
 
 				const radio = row.createEl('input') as HTMLInputElement;
 				radio.type = 'radio';
@@ -279,11 +254,8 @@ export class ImaSettingTab extends PluginSettingTab {
 
 				const label = row.createEl('label');
 				label.textContent = `${base.name}`;
-				label.style.cursor = 'pointer';
-				const idSpan = label.createEl('span');
+				const idSpan = label.createEl('span', { cls: 'ima-kb-id' });
 				idSpan.textContent = `  (${base.id})`;
-				idSpan.style.color = 'var(--text-muted)';
-				idSpan.style.fontSize = '0.85em';
 
 				// 点击整行也可以选中 / Clicking the whole row selects
 				const select = async () => {
@@ -302,8 +274,8 @@ export class ImaSettingTab extends PluginSettingTab {
 				.setButtonText('查看并选择知识库')
 				.onClick(async () => {
 					// 切换显示/隐藏 / Toggle show/hide
-					if (kbListContainer.style.display !== 'none') {
-						kbListContainer.style.display = 'none';
+					if (!kbListContainer.hasClass('ima-hidden') && kbListContainer.childElementCount > 0) {
+						kbListContainer.addClass('ima-hidden');
 						btn.setButtonText('查看并选择知识库');
 						return;
 					}
@@ -397,7 +369,7 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						// 控制文件夹名输入框的显示 / Show/hide subfolder name input
 						if (subfolderInput) {
-							subfolderInput.style.display = value === 'subfolder' ? '' : 'none';
+							subfolderInput.toggleClass('ima-hidden', value !== 'subfolder');
 						}
 					});
 			})
@@ -411,10 +383,10 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 				subfolderInput = text.inputEl;
-				subfolderInput.style.marginLeft = '8px';
-				subfolderInput.style.width = '120px';
-				subfolderInput.style.display =
-					this.plugin.settings.attachmentPathMode === 'subfolder' ? '' : 'none';
+				subfolderInput.addClass('ima-subfolder-input');
+				if (this.plugin.settings.attachmentPathMode !== 'subfolder') {
+					subfolderInput.addClass('ima-hidden');
+				}
 			});
 
 		// ── 图片链接格式 / Image link format ─────────────────────────────────

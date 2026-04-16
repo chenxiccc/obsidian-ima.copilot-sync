@@ -1,0 +1,58 @@
+/* IMA Sync 插件样式 / IMA Sync plugin styles */
+
+/* 凭证分组框背景和布局
+   Credentials box background and layout */
+.ima-cred-box {
+	background: var(--background-secondary);
+	border-radius: 8px;
+	padding: 4px 0;
+	margin-bottom: 16px;
+}
+
+/* 凭证分组框：消除内部 setting-item 的分割线
+   Credentials box: remove dividers from inner setting-items */
+.ima-cred-box .setting-item {
+	border-top: none !important;
+	border-bottom: none !important;
+}
+
+/* 宽输入框（用于 Client ID / API Key 输入）
+   Wide input (for Client ID / API Key fields) */
+.ima-input-wide {
+	width: 400px;
+}
+
+/* 知识库列表容器 / Knowledge base list container */
+.ima-kb-list {
+	margin-bottom: 12px;
+}
+
+/* 知识库列表行布局 / Knowledge base list row layout */
+.ima-kb-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 0;
+}
+
+/* 知识库列表行标签可点击 / KB list row label is clickable */
+.ima-kb-row label {
+	cursor: pointer;
+}
+
+/* 知识库 ID 灰色小字 / KB ID muted small text */
+.ima-kb-id {
+	color: var(--text-muted);
+	font-size: 0.85em;
+}
+
+/* 子文件夹名输入框（紧跟下拉框）/ Subfolder name input (right after dropdown) */
+.ima-subfolder-input {
+	margin-left: 8px;
+	width: 120px;
+}
+
+/* 通用隐藏类（用于功能性显隐切换）/ Generic hidden class (for functional visibility toggling) */
+.ima-hidden {
+	display: none;
+}

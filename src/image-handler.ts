@@ -287,7 +287,7 @@ export class ImageHandler {
 
 	/** 下载图片并写入 vault / Download image and write to vault */
 	private async downloadImage(url: string, destPath: string): Promise<void> {
-		console.log(`IMA Sync: 开始下载图片 / Downloading image: ${url.substring(0, 100)}...`);
+		console.debug(`IMA Sync: 开始下载图片 / Downloading image: ${url.substring(0, 100)}...`);
 		const response = await requestUrl({
 			url,
 			method: 'GET',
@@ -299,7 +299,7 @@ export class ImageHandler {
 			throw: false,
 		});
 
-		console.log(`IMA Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
+		console.debug(`IMA Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
 
 		if (response.status >= 400) {
 			// 记录响应头和正文（最多 500 字符）以辅助诊断
@@ -311,7 +311,7 @@ export class ImageHandler {
 
 		// 写入二进制文件 / Write binary file
 		await this.vault.adapter.writeBinary(destPath, response.arrayBuffer);
-		console.log(`IMA Sync: 图片已保存 / Image saved: ${destPath}`);
+		console.debug(`IMA Sync: 图片已保存 / Image saved: ${destPath}`);
 	}
 
 	/** 确保文件夹存在（逐级创建）/ Ensure folder exists (create recursively) */

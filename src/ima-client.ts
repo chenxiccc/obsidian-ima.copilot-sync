@@ -1,20 +1,20 @@
 import { requestUrl, Plugin } from 'obsidian';
-import * as fs from 'fs';
-import * as path from 'path';
+import type { DataAdapter } from 'obsidian';
 
 // IMA API base URL / IMA API 基础地址
 const BASE_URL = 'https://ima.qq.com';
 
-// 调试日志文件路径（插件目录下）/ Debug log file path (under plugin directory)
+// 调试日志文件路径（vault 内相对路径）/ Debug log file path (relative within vault)
 let debugLogPath = '';
 // 是否启用调试日志 / Whether debug logging is enabled
 let debugLogEnabled = false;
+// vault adapter 引用（用于写日志）/ Vault adapter reference (for writing log)
+let debugAdapter: DataAdapter | null = null;
 
 /** 初始化日志路径 / Initialize log path */
 export function initDebugLog(plugin: Plugin): void {
-	// @ts-ignore — Obsidian 内部属性，用于获取插件目录 / Obsidian internal property for plugin dir
-	const pluginDir = (plugin.app.vault.adapter as { basePath: string }).basePath;
-	debugLogPath = path.join(pluginDir, '.obsidian', 'plugins', 'obsidian-ima-sync', 'ima-debug.log');
+	debugAdapter = plugin.app.vault.adapter;
+	debugLogPath = '.obsidian/plugins/obsidian-ima-sync/ima-debug.log';
 }
 
 /** 更新调试日志开关 / Update debug log enabled state */
@@ -24,13 +24,10 @@ export function setDebugLogEnabled(enabled: boolean): void {
 
 /** 追加写入调试日志（仅在开关开启时有效）/ Append to debug log (only when enabled) */
 function debugLog(msg: string): void {
-	if (!debugLogEnabled || !debugLogPath) return;
+	if (!debugLogEnabled || !debugLogPath || !debugAdapter) return;
 	const line = `[${new Date().toISOString()}] ${msg}\n`;
-	try {
-		fs.appendFileSync(debugLogPath, line, 'utf8');
-	} catch {
-		// 写日志失败不影响主流程 / Log write failure doesn't affect main flow
-	}
+	// 使用 vault adapter 写日志，跨平台兼容 / Use vault adapter for cross-platform log writing
+	void debugAdapter.append(debugLogPath, line);
 }
 
 // ─── 数据类型定义 / Data type definitions ───────────────────────────────────
