@@ -81,38 +81,6 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		const credBox = containerEl.createDiv({ cls: 'ima-cred-box' });
 
-		new Setting(credBox)
-			.setName('Client ID')
-			.setDesc('IMA OpenAPI 的 Client ID')
-			.addText(text => {
-				text
-					.setPlaceholder('输入 Client ID')
-					.setValue(this.plugin.settings.clientId)
-					.onChange(async value => {
-						this.plugin.settings.clientId = value.trim();
-						await this.plugin.saveSettings();
-					});
-				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
-				text.inputEl.addClass('ima-input-wide');
-			});
-
-		new Setting(credBox)
-			.setName('API Key')
-			.setDesc('IMA OpenAPI 的 API Key')
-			.addText(text => {
-				text
-					.setPlaceholder('输入 API Key')
-					.setValue(this.plugin.settings.apiKey)
-					.onChange(async value => {
-						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
-					});
-				// 隐藏输入内容 / Hide input content
-				text.inputEl.type = 'password';
-				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
-				text.inputEl.addClass('ima-input-wide');
-			});
-
 		// ── 凭证获取说明 + 一键粘贴 / Credential instructions + paste button ──
 
 		new Setting(credBox)
@@ -170,6 +138,38 @@ export class ImaSettingTab extends PluginSettingTab {
 						new Notice('凭证已填入');
 					}),
 			);
+
+		new Setting(credBox)
+			.setName('Client ID')
+			.setDesc('IMA OpenAPI 的 Client ID')
+			.addText(text => {
+				text
+					.setPlaceholder('输入 Client ID')
+					.setValue(this.plugin.settings.clientId)
+					.onChange(async value => {
+						this.plugin.settings.clientId = value.trim();
+						await this.plugin.saveSettings();
+					});
+				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
+				text.inputEl.addClass('ima-input-wide');
+			});
+
+		new Setting(credBox)
+			.setName('API Key')
+			.setDesc('IMA OpenAPI 的 API Key')
+			.addText(text => {
+				text
+					.setPlaceholder('输入 API Key')
+					.setValue(this.plugin.settings.apiKey)
+					.onChange(async value => {
+						this.plugin.settings.apiKey = value.trim();
+						await this.plugin.saveSettings();
+					});
+				// 隐藏输入内容 / Hide input content
+				text.inputEl.type = 'password';
+				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
+				text.inputEl.addClass('ima-input-wide');
+			});
 
 		// ── 测试连接 / Test connection ──────────────────────────────────────
 

@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-ima-sync",
-	"version": "1.2.0",
+	"version": "1.2.1",
 	"description": "Sync notes from IMA personal knowledge base to Obsidian",
 	"main": "main.js",
 	"type": "module",
