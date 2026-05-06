@@ -8,6 +8,7 @@ import {
 	ensureFolder,
 	exceedsSizeLimit,
 	extractNoteDir,
+	resolveLinkFormat,
 } from './path-utils';
 
 // ─── 通用文件下载器（支持反盗链）/ Generic file downloader (with anti-hotlink support) ──
@@ -200,12 +201,7 @@ export class FileDownloader {
 		noteFilePath: string,
 		opts: AttachmentOptions,
 	): string {
-		let format = opts.linkFormat;
-		if (format === 'auto') {
-			const useMarkdown = (this.vault as unknown as { getConfig(k: string): boolean })
-				.getConfig('useMarkdownLinks') ?? false;
-			format = useMarkdown ? 'markdown' : 'wikilink';
-		}
+		const format = resolveLinkFormat(this.vault, opts.linkFormat);
 
 		if (format === 'wikilink') {
 			return `![[${filename}]]`;

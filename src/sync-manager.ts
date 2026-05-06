@@ -7,7 +7,7 @@ import { ImageHandler } from './image-handler';
 import { JsonToMarkdown } from './json-to-md';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, ensureFolder } from './path-utils';
+import { CHROME_UA, sanitizeFilename, ensureFolder, guessFileExtension } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -268,7 +268,6 @@ export class SyncManager {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
 				const rawJson = await this.client!.getNoteContent(notebookId);
 				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts);
-				// 笔记类型也加上 media_id frontmatter / Add media_id frontmatter for note type too
 				return this.prependFrontmatterField(mdContent, 'media_id', item.media_id);
 			}
 
@@ -484,25 +483,8 @@ export class SyncManager {
 				return sanitizeFilename(decoded);
 			}
 		} catch { /* ignore */ }
-		const ext = this.guessExtensionFromUrl(url);
+		const ext = guessFileExtension(url);
 		return `${sanitizeFilename(fallbackTitle).slice(0, 80)}${ext}`;
-	}
-
-	/** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
-	private guessExtensionFromUrl(url: string): string {
-		const lower = url.toLowerCase();
-		if (lower.includes('.pdf')) return '.pdf';
-		if (lower.includes('.doc') || lower.includes('.docx')) return '.docx';
-		if (lower.includes('.ppt') || lower.includes('.pptx')) return '.pptx';
-		if (lower.includes('.xls') || lower.includes('.xlsx')) return '.xlsx';
-		if (lower.includes('.txt')) return '.txt';
-		if (lower.includes('.xmind')) return '.xmind';
-		if (lower.includes('.md') || lower.includes('.markdown')) return '.md';
-		if (lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
-		if (lower.includes('.png')) return '.png';
-		if (lower.includes('.gif')) return '.gif';
-		if (lower.includes('.webp')) return '.webp';
-		return '';
 	}
 
 	/** 构建占位符内容 / Build placeholder content */
@@ -565,6 +547,9 @@ export class SyncManager {
 	/**
 	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
 	 * Check image paths and delete files no longer referenced by any synced note
+	 *
+	 * 使用 metadataCache 替代全文件读取，零 I/O
+	 * Uses metadataCache instead of full file reads, zero I/O
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
@@ -574,17 +559,18 @@ export class SyncManager {
 
 		const referencedFilenames = new Set<string>();
 		for (const file of mdFiles) {
-			try {
-				const content = await this.vault.read(file);
-				for (const m of content.matchAll(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g)) {
-					referencedFilenames.add(m[1]!);
-				}
-				for (const m of content.matchAll(/!\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g)) {
-					const raw = m[1]!;
-					const decoded = raw.split('/').map(seg => decodeURIComponent(seg)).join('/');
+			const cache = this.app.metadataCache.getFileCache(file);
+			if (!cache) continue;
+
+			for (const embed of cache.embeds ?? []) {
+				referencedFilenames.add(embed.link.split('/').pop() ?? embed.link);
+			}
+			for (const link of cache.links ?? []) {
+				if (link.original.startsWith('!') && !link.link.startsWith('http')) {
+					const decoded = link.link.split('/').map(s => decodeURIComponent(s)).join('/');
 					referencedFilenames.add(decoded.split('/').pop() ?? decoded);
 				}
-			} catch { /* skip */ }
+			}
 		}
 
 		for (const imgPath of imagePaths) {

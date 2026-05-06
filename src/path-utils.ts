@@ -1,5 +1,6 @@
 import { Vault, normalizePath, requestUrl } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
+import type { LinkFormat } from './settings';
 
 // ─── 共享常量 / Shared constants ─────────────────────────────────────────────
 
@@ -110,4 +111,33 @@ export async function exceedsSizeLimit(url: string, limitBytes: number, extraHea
 		}
 	} catch { /* HEAD 失败时不阻止下载 / Don't block download if HEAD fails */ }
 	return false;
+}
+
+// ─── 链接格式 / Link format ──────────────────────────────────────────────────
+
+/** 解析链接格式（auto → 读取 vault 配置）/ Resolve link format (auto → read vault config) */
+export function resolveLinkFormat(vault: Vault, format: LinkFormat): 'wikilink' | 'markdown' {
+	if (format !== 'auto') return format;
+	const useMarkdown = (vault as unknown as { getConfig(k: string): boolean })
+		.getConfig('useMarkdownLinks') ?? false;
+	return useMarkdown ? 'markdown' : 'wikilink';
+}
+
+// ─── 扩展名推断 / Extension guessing ─────────────────────────────────────────
+
+/** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
+export function guessFileExtension(url: string): string {
+	const lower = url.toLowerCase();
+	if (lower.includes('.pdf')) return '.pdf';
+	if (lower.includes('.doc') || lower.includes('.docx')) return '.docx';
+	if (lower.includes('.ppt') || lower.includes('.pptx')) return '.pptx';
+	if (lower.includes('.xls') || lower.includes('.xlsx')) return '.xlsx';
+	if (lower.includes('.txt')) return '.txt';
+	if (lower.includes('.xmind')) return '.xmind';
+	if (lower.includes('.md') || lower.includes('.markdown')) return '.md';
+	if (lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
+	if (lower.includes('.png')) return '.png';
+	if (lower.includes('.gif')) return '.gif';
+	if (lower.includes('.webp')) return '.webp';
+	return '';
 }

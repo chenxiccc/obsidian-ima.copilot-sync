@@ -8,6 +8,8 @@ import {
 	ensureFolder,
 	exceedsSizeLimit,
 	extractNoteDir,
+	resolveLinkFormat,
+	guessFileExtension,
 } from './path-utils';
 
 // 匹配 Markdown 图片语法：![alt](https://...) / Match Markdown image syntax
@@ -72,7 +74,6 @@ export class ImageHandler {
 			if (!url) continue;
 
 			try {
-				// 大小限制检查 / Size limit check
 				if (opts.attachmentSizeLimitBytes > 0) {
 					const exceeded = await exceedsSizeLimit(url, opts.attachmentSizeLimitBytes);
 					if (exceeded) {
@@ -84,7 +85,6 @@ export class ImageHandler {
 				const filename = this.urlToFilename(url, i);
 				const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
-				// 已存在则跳过下载 / Skip download if file already exists
 				const exists = await this.vault.adapter.exists(destPath);
 				if (!exists) {
 					await this.downloadImage(url, destPath);
@@ -93,8 +93,6 @@ export class ImageHandler {
 				const link = this.formatLink(filename, destPath, noteFilePath, alt, opts.linkFormat);
 				content = content.replace(full, link);
 			} catch {
-				// 下载失败时保留原始链接，不中断整体同步
-				// Keep original link on download failure, don't interrupt overall sync
 				console.warn(`IMA Sync: 图片下载失败，跳过 / Image download failed, skipping: ${url}`);
 			}
 		}
@@ -109,8 +107,6 @@ export class ImageHandler {
 	extractLocalImagePaths(content: string, noteFilePath: string, opts: AttachmentOptions): string[] {
 		const paths: string[] = [];
 
-		// 解析 wikilink 格式：![[filename.png]] 或 ![[filename.png|alt]]
-		// Parse wikilink format: ![[filename.png]] or ![[filename.png|alt]]
 		const folder = this.resolveAttachmentFolder(noteFilePath, opts);
 		const wikilinkRegex = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
 		let m: RegExpExecArray | null;
@@ -147,7 +143,6 @@ export class ImageHandler {
 		const filename = this.urlToFilename(url, 0);
 		const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
-		// 已存在则跳过下载 / Skip download if file already exists
 		const exists = await this.vault.adapter.exists(destPath);
 		if (!exists) {
 			await this.downloadImage(url, destPath);
@@ -156,10 +151,7 @@ export class ImageHandler {
 		return this.formatLink(filename, destPath, noteFilePath, '', opts.linkFormat);
 	}
 
-	/**
-	 * 生成图片引用链接（wiki 或标准 Markdown）
-	 * Generate image reference link (wiki or standard Markdown)
-	 */
+	/** 生成图片引用链接（wiki 或标准 Markdown）/ Generate image reference link */
 	private formatLink(
 		filename: string,
 		destPath: string,
@@ -167,19 +159,12 @@ export class ImageHandler {
 		alt: string,
 		format: LinkFormat,
 	): string {
-		// 解析 auto 格式 / Resolve auto format
-		let resolved = format;
-		if (format === 'auto') {
-			const useMarkdown = (this.vault as unknown as { getConfig(k: string): boolean })
-				.getConfig('useMarkdownLinks') ?? false;
-			resolved = useMarkdown ? 'markdown' : 'wikilink';
-		}
+		const resolved = resolveLinkFormat(this.vault, format);
 
 		if (resolved === 'wikilink') {
 			return alt ? `![[${filename}|${alt}]]` : `![[${filename}]]`;
 		}
 
-		// 标准 Markdown 格式，计算相对路径 / Standard Markdown, calculate relative path
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
 		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
@@ -197,21 +182,11 @@ export class ImageHandler {
 				return sanitizeFilename(cleanSegment);
 			}
 
-			const ext = this.guessExtFromUrl(url);
+			const ext = guessFileExtension(url) || '.png';
 			return `img_${this.hashUrl(url)}${ext}`;
 		} catch {
 			return `img_${index}.png`;
 		}
-	}
-
-	/** 从 URL 猜测图片扩展名 / Guess image extension from URL */
-	private guessExtFromUrl(url: string): string {
-		const lower = url.toLowerCase();
-		if (lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
-		if (lower.includes('.png')) return '.png';
-		if (lower.includes('.gif')) return '.gif';
-		if (lower.includes('.webp')) return '.webp';
-		return '.png';
 	}
 
 	/** 简单哈希函数用于生成唯一文件名 / Simple hash for unique filename */
@@ -220,7 +195,7 @@ export class ImageHandler {
 		for (let i = 0; i < url.length; i++) {
 			const char = url.charCodeAt(i);
 			hash = (hash << 5) - hash + char;
-			hash = hash & hash; // 转为 32 位整数 / Convert to 32bit int
+			hash = hash & hash;
 		}
 		return Math.abs(hash).toString(16);
 	}
@@ -242,14 +217,11 @@ export class ImageHandler {
 		console.debug(`IMA Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
 
 		if (response.status >= 400) {
-			// 记录响应头和正文（最多 500 字符）以辅助诊断
-			// Log response headers and body (up to 500 chars) to help diagnose
 			const bodySnippet = response.text?.substring(0, 500) ?? '';
 			console.error(`IMA Sync: 图片下载失败 / Image download failed: HTTP ${response.status}, body: ${bodySnippet}`);
 			throw new Error(`HTTP ${response.status}`);
 		}
 
-		// 写入二进制文件 / Write binary file
 		await this.vault.adapter.writeBinary(destPath, response.arrayBuffer);
 		console.debug(`IMA Sync: 图片已保存 / Image saved: ${destPath}`);
 	}
