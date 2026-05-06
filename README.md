@@ -9,13 +9,14 @@
 将腾讯 [IMA](https://ima.qq.com) 个人笔记和知识库同步到 Obsidian vault 的插件。
 
 > **⚠ 单向同步**：本插件仅支持 **IMA → Obsidian** 单向同步。在 Obsidian 中对笔记做的任何修改**不会**同步回 IMA，每次同步会用 IMA 服务端内容覆盖本地文件。
->
-> **知识库同步限制**：知识库中的笔记类型条目可完整同步；网页书签、微信文章、PDF、Word 等非笔记类型条目**仅同步标题**，无法获取原文（IMA API 不提供此能力）。
 
 ### 功能特性
 
 - **个人笔记同步**：将 IMA 笔记本中的所有笔记自动下载到 Obsidian
-- **知识库同步**：同步知识库中的笔记类型条目
+- **知识库完整同步**：同步知识库中的所有类型条目
+  - **笔记**：完整同步 Slate 内容并转为 Markdown
+  - **网页/微信文章**：提取正文内容并转为 Markdown
+  - **文件**（PDF、Word、PPT、Excel 等）：下载到本地附件目录
 - **图片本地化**：自动下载笔记中的图片并保存到本地附件目录
 - **增量同步**：仅同步上次同步后有修改的笔记，减少不必要的请求
 - **灵活的附件路径**：支持三种附件保存位置模式
@@ -59,7 +60,7 @@
 | 设置项        | 说明                                             |
 | ------------- | ------------------------------------------------ |
 | 同步 IMA 笔记 | 同步 IMA 个人笔记本中的所有笔记                  |
-| 同步知识库    | 开启后选择要同步的知识库（仅支持笔记类型条目）   |
+| 同步知识库    | 开启后选择要同步的知识库，支持所有类型条目       |
 | 同步文件夹    | 笔记保存到 vault 内的哪个文件夹（默认：`ima`） |
 | 同步间隔      | 自动同步的时间间隔（分钟，默认 60）              |
 
@@ -78,7 +79,7 @@
 
 ### 已知限制
 
-- 知识库中的**网页书签、微信文章、PDF、Word** 等非笔记类型条目，目前仅同步标题，暂不支持获取原文内容（IMA API 限制）
+- 知识库中部分条目如果 IMA API 未返回可访问的 URL，将仅同步标题（显示为占位符）
 - 图片 URL 为腾讯 COS 临时签名链接，约 8 小时后失效；插件会在每次同步时自动修复失效的图片链接
 
 ### 开发构建
@@ -101,13 +102,14 @@ npm run build
 An Obsidian plugin to sync notes from [Tencent IMA](https://ima.qq.com) personal notebook and knowledge base into your Obsidian vault.
 
 > **⚠ One-way sync only**: This plugin syncs **IMA → Obsidian** only. Any edits made in Obsidian will **not** be synced back to IMA — each sync overwrites local files with the content from IMA.
->
-> **Knowledge base limitations**: Note-type items are fully synced. Other item types — webpage bookmarks, WeChat articles, PDFs, Word documents, etc. — **sync title only**; full content is unavailable due to IMA API restrictions.
 
 ### Features
 
 - **Personal notes sync**: Automatically downloads all notes from your IMA notebook
-- **Knowledge base sync**: Syncs note-type items from your IMA knowledge base
+- **Full knowledge base sync**: Syncs all item types from your IMA knowledge base
+  - **Notes**: Full Slate content converted to Markdown
+  - **Webpages/WeChat articles**: Extracts main content and converts to Markdown
+  - **Files** (PDF, Word, PPT, Excel, etc.): Downloads to local attachment directory
 - **Image localization**: Downloads inline images and saves them to a local attachment folder
 - **Incremental sync**: Only fetches notes modified since the last sync
 - **Flexible attachment paths**: Three modes for where attachments are saved
@@ -146,12 +148,12 @@ Click **「测试」** to verify the connection.
 
 #### 3. Choose what to sync
 
-| Setting             | Description                                                       |
-| ------------------- | ----------------------------------------------------------------- |
-| Sync IMA Notes      | Sync all notes from your IMA personal notebook                    |
-| Sync Knowledge Base | Enable and select a knowledge base to sync (note-type items only) |
-| Sync Folder         | Vault folder where notes are saved (default:`ima`)              |
-| Sync Interval       | Auto-sync interval in minutes (default: 60)                       |
+| Setting             | Description                                                        |
+| ------------------- | ------------------------------------------------------------------ |
+| Sync IMA Notes      | Sync all notes from your IMA personal notebook                     |
+| Sync Knowledge Base | Enable and select a knowledge base to sync (all item types)        |
+| Sync Folder         | Vault folder where notes are saved (default:`ima`)               |
+| Sync Interval       | Auto-sync interval in minutes (default: 60)                        |
 
 #### 4. Attachment settings
 
@@ -168,7 +170,7 @@ Click **「测试」** to verify the connection.
 
 ### Known Limitations
 
-- Knowledge base items of type **webpage bookmark, WeChat article, PDF, Word**, etc. currently only sync the title — full content is not available due to IMA API restrictions
+- Some knowledge base items may only sync the title (shown as a placeholder) if the IMA API does not return an accessible URL
 - Image URLs are Tencent COS temporary signed links that expire after ~8 hours; the plugin automatically repairs broken image links on each sync
 
 ### Development
