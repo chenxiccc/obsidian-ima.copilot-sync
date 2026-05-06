@@ -7,6 +7,7 @@ import { ImageHandler } from './image-handler';
 import { JsonToMarkdown } from './json-to-md';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
+import { CHROME_UA, sanitizeFilename, ensureFolder } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -17,8 +18,6 @@ const MEDIA_TYPE_LABELS: Record<number, string> = {
 };
 
 const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
-
-const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 export class SyncManager {
 	private client: ImaClient | null = null;
@@ -113,7 +112,7 @@ export class SyncManager {
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const opts = this.buildAttachmentOptions();
 
-		await this.ensureFolder(syncFolder);
+		await ensureFolder(this.vault, syncFolder);
 
 		let syncedCount = 0;
 
@@ -122,7 +121,7 @@ export class SyncManager {
 			const notes = await client.listAllNotes(this.settings.lastSyncTime);
 			for (const note of notes) {
 				try {
-					const filename = this.sanitizeFilename(note.title || note.docid);
+					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const rawJson = await client.getNoteContent(note.docid);
 					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts);
@@ -141,7 +140,7 @@ export class SyncManager {
 				new Notice('IMA Sync: 请在设置中填写知识库 ID');
 			} else {
 				const kbFolder = normalizePath(`${syncFolder}/知识库`);
-				await this.ensureFolder(kbFolder);
+				await ensureFolder(this.vault, kbFolder);
 
 				// 扫描已有文件，构建 media_id → filePath 映射（增量同步判重，零 I/O）
 				// Scan existing files, build media_id → filePath map (incremental sync dedup, zero I/O)
@@ -168,7 +167,7 @@ export class SyncManager {
 						// 条目不可变，已存在则跳过 / Items are immutable, skip if exists
 						if (existingMap.has(item.media_id)) continue;
 
-						const filename = this.sanitizeFilename(item.title || item.media_id);
+						const filename = sanitizeFilename(item.title || item.media_id);
 						const filePath = normalizePath(`${kbFolder}/${filename}.md`);
 
 						const content = await this.syncKnowledgeItem(item, filePath, opts);
@@ -564,6 +563,9 @@ export class SyncManager {
 	/**
 	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
 	 * Check image paths and delete files no longer referenced by any synced note
+	 *
+	 * 优化：一次性构建引用索引（O(M+N)），而非逐图逐文件扫描（O(N×M)）
+	 * Optimized: build reference index once (O(M+N)) instead of per-image per-file scan (O(N×M))
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
@@ -571,28 +573,38 @@ export class SyncManager {
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/') && f.path !== skipFile,
 		);
 
+		// 一次性读取所有 md 文件，提取图片引用到 Set（O(M) 次读取）
+		// Read all md files once, extract image references into Set (O(M) reads)
+		const referencedFilenames = new Set<string>();
+		for (const file of mdFiles) {
+			try {
+				const content = await this.vault.read(file);
+				// 提取 wikilink 引用的文件名 / Extract filenames from wikilink references
+				for (const m of content.matchAll(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g)) {
+					referencedFilenames.add(m[1]!);
+				}
+				// 提取 Markdown 链接引用的文件名 / Extract filenames from Markdown link references
+				for (const m of content.matchAll(/!\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g)) {
+					const raw = m[1]!;
+					// 解码后取文件名部分 / Decode and extract filename part
+					const decoded = raw.split('/').map(seg => decodeURIComponent(seg)).join('/');
+					referencedFilenames.add(decoded.split('/').pop() ?? decoded);
+				}
+			} catch {
+				// 读取失败时跳过 / Skip on read failure
+			}
+		}
+
+		// 对每张孤儿图片，查 Set 判断是否仍被引用（O(N) 次查表）
+		// For each orphan image, check Set for references (O(N) lookups)
 		for (const imgPath of imagePaths) {
 			try {
 				const exists = await this.vault.adapter.exists(imgPath);
 				if (!exists) continue;
 
 				const filename = imgPath.split('/').pop() ?? '';
-				let stillReferenced = false;
-
-				for (const file of mdFiles) {
-					const fileContent = await this.vault.read(file);
-					if (fileContent.includes(`[[${filename}]]`) ||
-						fileContent.includes(`[[${filename}|`) ||
-						fileContent.includes(`(${encodeURIComponent(filename)})`) ||
-						fileContent.includes(`/${encodeURIComponent(filename)})`) ||
-						fileContent.includes(`(${filename})`) ||
-						fileContent.includes(`/${filename})`)) {
-						stillReferenced = true;
-						break;
-					}
-				}
-
-				if (!stillReferenced) {
+				if (!referencedFilenames.has(filename) &&
+					!referencedFilenames.has(encodeURIComponent(filename))) {
 					await this.vault.adapter.remove(imgPath);
 					console.debug(`IMA Sync: 删除孤儿图片 / Removed orphan image: ${imgPath}`);
 				}
@@ -600,20 +612,5 @@ export class SyncManager {
 				console.warn(`IMA Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);
 			}
 		}
-	}
-
-	private async ensureFolder(folderPath: string): Promise<void> {
-		const exists = await this.vault.adapter.exists(folderPath);
-		if (!exists) {
-			await this.vault.createFolder(folderPath);
-		}
-	}
-
-	private sanitizeFilename(name: string): string {
-		return name
-			.replace(/[/\\:*?"<>|#^[\]]/g, '_')
-			.replace(/\s+/g, ' ')
-			.trim()
-			.slice(0, 100);
 	}
 }

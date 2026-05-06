@@ -1,10 +1,16 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
+import {
+	CHROME_UA,
+	sanitizeFilename,
+	resolveAttachmentFolder,
+	calcRelativePath,
+	ensureFolder,
+	exceedsSizeLimit,
+	extractNoteDir,
+} from './path-utils';
 
 // ─── 通用文件下载器（支持反盗链）/ Generic file downloader (with anti-hotlink support) ──
-
-// Chrome UA 字符串，用于反盗链伪装 / Chrome UA string for anti-hotlink spoofing
-const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 /** 下载结果 / Download result */
 export interface DownloadResult {
@@ -39,18 +45,18 @@ export class FileDownloader {
 
 		// 大小限制检查 / Size limit check
 		if (opts.attachmentSizeLimitBytes > 0) {
-			const exceeds = await this.exceedsSizeLimit(url, opts.attachmentSizeLimitBytes, headers);
-			if (exceeds) {
+			const exceeded = await exceedsSizeLimit(url, opts.attachmentSizeLimitBytes, headers);
+			if (exceeded) {
 				console.debug(`IMA Sync: 附件超过大小限制，保留原链接 / Attachment exceeds size limit, keeping link: ${url}`);
 				const linkText = isImage ? `![${filename}](${url})` : `[${filename}](${url})`;
 				return { localPath: '', linkText };
 			}
 		}
 
-		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
-		await this.ensureFolder(attachmentFolder);
+		const attachmentFolder = resolveAttachmentFolder(this.vault, noteFilePath, opts);
+		await ensureFolder(this.vault, attachmentFolder);
 
-		const sanitized = this.sanitizeFilename(filename);
+		const sanitized = sanitizeFilename(filename);
 		const destPath = normalizePath(`${attachmentFolder}/${sanitized}`);
 
 		// 已存在则跳过下载 / Skip download if file already exists
@@ -206,10 +212,8 @@ export class FileDownloader {
 		}
 
 		// Markdown 格式，计算相对路径 / Markdown format, calculate relative path
-		const noteDir = noteFilePath.includes('/')
-			? noteFilePath.substring(0, noteFilePath.lastIndexOf('/'))
-			: '';
-		const relPath = this.calcRelativePath(noteDir, destPath);
+		const noteDir = extractNoteDir(noteFilePath);
+		const relPath = calcRelativePath(noteDir, destPath);
 		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
 		return `![](${encoded})`;
 	}
@@ -220,90 +224,9 @@ export class FileDownloader {
 		destPath: string,
 		noteFilePath: string,
 	): string {
-		const noteDir = noteFilePath.includes('/')
-			? noteFilePath.substring(0, noteFilePath.lastIndexOf('/'))
-			: '';
-		const relPath = this.calcRelativePath(noteDir, destPath);
+		const noteDir = extractNoteDir(noteFilePath);
+		const relPath = calcRelativePath(noteDir, destPath);
 		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
 		return `[${filename}](${encoded})`;
-	}
-
-	/** 计算相对路径 / Calculate relative path */
-	private calcRelativePath(fromDir: string, toPath: string): string {
-		const fromParts = fromDir ? fromDir.split('/') : [];
-		const toParts = toPath.split('/');
-
-		let common = 0;
-		while (
-			common < fromParts.length &&
-			common < toParts.length &&
-			fromParts[common] === toParts[common]
-		) {
-			common++;
-		}
-
-		const ups = Array(fromParts.length - common).fill('..');
-		const downs = toParts.slice(common);
-		return [...ups, ...downs].join('/') || '.';
-	}
-
-	/** 解析附件文件夹路径（与 ImageHandler 相同逻辑）/ Resolve attachment folder path (same logic as ImageHandler) */
-	private resolveAttachmentFolder(noteFilePath: string, opts: AttachmentOptions): string {
-		const noteDir = noteFilePath.includes('/')
-			? noteFilePath.substring(0, noteFilePath.lastIndexOf('/'))
-			: '';
-		const noteBasename = noteFilePath
-			.replace(/^.*\//, '')
-			.replace(/\.md$/, '');
-
-		switch (opts.pathMode) {
-			case 'subfolder':
-				return normalizePath(`${opts.syncFolder}/${opts.subfolderName || 'attachments'}`);
-			case 'obsidian': {
-				const setting: string =
-					(this.vault as unknown as { getConfig(k: string): string }).getConfig('attachmentFolderPath')
-					?? 'attachments';
-				if (!setting || setting === '/') return normalizePath('/');
-				if (setting.startsWith('./')) {
-					return normalizePath(`${noteDir}/${setting.slice(2)}`);
-				}
-				return normalizePath(setting);
-			}
-			case 'samename':
-				return normalizePath(`${opts.syncFolder}/${noteBasename}`);
-			default:
-				return normalizePath(`${opts.syncFolder}/attachments`);
-		}
-	}
-
-	/** 清理文件名 / Sanitize filename */
-	private sanitizeFilename(name: string): string {
-		return name.replace(/[/\\:*?"<>|]/g, '_').trim();
-	}
-
-	/** HEAD 请求检查附件是否超过大小限制 / HEAD request to check if attachment exceeds size limit */
-	private async exceedsSizeLimit(url: string, limitBytes: number, extraHeaders?: Record<string, string>): Promise<boolean> {
-		try {
-			const response = await requestUrl({
-				url,
-				method: 'HEAD',
-				headers: { 'User-Agent': CHROME_UA, ...extraHeaders },
-				throw: false,
-			});
-			const contentLength = response.headers?.['content-length'];
-			if (contentLength && Number(contentLength) > limitBytes) {
-				return true;
-			}
-		} catch { /* HEAD 失败时不阻止下载 / Don't block download if HEAD fails */ }
-		return false;
-	}
-
-	/** 确保文件夹存在 / Ensure folder exists */
-	private async ensureFolder(folderPath: string): Promise<void> {
-		const normalized = normalizePath(folderPath);
-		const exists = await this.vault.adapter.exists(normalized);
-		if (!exists) {
-			await this.vault.createFolder(normalized);
-		}
 	}
 }
