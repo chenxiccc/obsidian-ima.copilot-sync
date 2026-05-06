@@ -21,7 +21,7 @@ const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 export class SyncManager {
-	private client: ImaClient;
+	private client: ImaClient | null = null;
 	private imageHandler: ImageHandler;
 	private jsonToMd: JsonToMarkdown;
 	private fileDownloader: FileDownloader;
@@ -32,18 +32,16 @@ export class SyncManager {
 		private readonly vault: Vault,
 		private readonly settings: ImaPluginSettings,
 		private readonly saveSettings: () => Promise<void>,
+		private readonly resolveCredentials: () => { clientId: string | null; apiKey: string | null },
 	) {
-		this.client = new ImaClient(settings.clientId, settings.apiKey);
 		this.imageHandler = new ImageHandler(vault);
 		this.jsonToMd = new JsonToMarkdown(this.imageHandler);
 		this.fileDownloader = new FileDownloader(vault);
 	}
 
 	rebuildClient(): void {
-		this.client = new ImaClient(this.settings.clientId, this.settings.apiKey);
-		this.imageHandler = new ImageHandler(this.vault);
-		this.jsonToMd = new JsonToMarkdown(this.imageHandler);
-		this.fileDownloader = new FileDownloader(this.vault);
+		const { clientId, apiKey } = this.resolveCredentials();
+		this.client = (clientId && apiKey) ? new ImaClient(clientId, apiKey) : null;
 	}
 
 	async syncOnce(): Promise<void> {
@@ -52,10 +50,13 @@ export class SyncManager {
 			return;
 		}
 
-		if (!this.settings.clientId || !this.settings.apiKey) {
+		const { clientId, apiKey } = this.resolveCredentials();
+		if (!clientId || !apiKey) {
 			new Notice('IMA Sync: 请先在设置中填写 Client ID 和 API Key');
 			return;
 		}
+
+		this.rebuildClient();
 
 		this.isSyncing = true;
 		new Notice('IMA Sync: 开始同步…');
@@ -94,11 +95,21 @@ export class SyncManager {
 			subfolderName: this.settings.attachmentSubfolderName,
 			linkFormat: this.settings.linkFormat,
 			syncFolder: normalizePath(this.settings.syncFolder),
+			downloadAttachments: this.settings.downloadAttachments,
+			attachmentSizeLimitBytes: this.calcSizeLimitBytes(),
 		};
+	}
+
+	private calcSizeLimitBytes(): number {
+		const { attachmentSizeLimit, attachmentSizeLimitUnit } = this.settings;
+		if (attachmentSizeLimit <= 0) return 0;
+		const multipliers: Record<string, number> = { KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+		return Math.round(attachmentSizeLimit * (multipliers[attachmentSizeLimitUnit] ?? 1));
 	}
 
 	/** 核心同步逻辑 / Core sync logic */
 	private async doSync(): Promise<number> {
+		const client = this.client!;
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const opts = this.buildAttachmentOptions();
 
@@ -108,12 +119,12 @@ export class SyncManager {
 
 		// ── 同步 IMA 笔记 / Sync IMA notes ──
 		if (this.settings.syncNotes) {
-			const notes = await this.client.listAllNotes(this.settings.lastSyncTime);
+			const notes = await client.listAllNotes(this.settings.lastSyncTime);
 			for (const note of notes) {
 				try {
 					const filename = this.sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
-					const rawJson = await this.client.getNoteContent(note.docid);
+					const rawJson = await client.getNoteContent(note.docid);
 					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts);
 					await this.writeNote(filePath, processedContent, opts);
 					syncedCount++;
@@ -136,7 +147,7 @@ export class SyncManager {
 				// Scan existing files, build media_id → filePath map (incremental sync dedup, zero I/O)
 				const existingMap = this.scanExistingKbFiles(kbFolder);
 
-				const items = await this.client.listAllKnowledgeItems(kbId);
+				const items = await client.listAllKnowledgeItems(kbId);
 
 				// ── 删除同步：本地有但 API 没有 → 按设置处理 / Delete sync ──
 				const apiMediaIds = new Set(items.map(i => i.media_id));
@@ -251,12 +262,12 @@ export class SyncManager {
 		opts: AttachmentOptions,
 	): Promise<string | null> {
 		try {
-			const mediaInfo = await this.client.getMediaInfo(item.media_id);
+			const mediaInfo = await this.client!.getMediaInfo(item.media_id);
 
 			// ── 分支 A：笔记类型 ──
 			if (mediaInfo.media_type === 11 && mediaInfo.notebook_ext_info?.notebook_id) {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
-				const rawJson = await this.client.getNoteContent(notebookId);
+				const rawJson = await this.client!.getNoteContent(notebookId);
 				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts);
 				// 笔记类型也加上 media_id frontmatter / Add media_id frontmatter for note type too
 				return this.prependFrontmatterField(mdContent, 'media_id', item.media_id);
@@ -430,6 +441,16 @@ export class SyncManager {
 		isImage: boolean,
 		mediaId: string,
 	): Promise<string> {
+		const fm = `---\nmedia_id: "${mediaId}"\n---\n\n`;
+
+		// 不下载附件 → 保留原链接 / Skip download, keep original link
+		if (!opts.downloadAttachments) {
+			if (isImage) {
+				return `${fm}![${title}](${url})`;
+			}
+			return `${fm}# ${title}\n\n[${title}](${url})`;
+		}
+
 		try {
 			const filename = this.inferFilenameFromUrl(url, title);
 
@@ -443,10 +464,10 @@ export class SyncManager {
 			});
 
 			if (isImage) {
-				return `---\nmedia_id: "${mediaId}"\n---\n\n${result.linkText}`;
+				return `${fm}${result.linkText}`;
 			}
 
-			return `---\nmedia_id: "${mediaId}"\n---\n\n# ${title}\n\n${result.linkText}`;
+			return `${fm}# ${title}\n\n${result.linkText}`;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			const typeLabel = MEDIA_TYPE_LABELS[isImage ? 9 : 0] ?? '文件';
@@ -496,6 +517,8 @@ export class SyncManager {
 	 * Scan all .md files in sync folder, download leftover external image links
 	 */
 	private async fixPendingImages(syncFolder: string, opts: AttachmentOptions): Promise<void> {
+		if (!opts.downloadAttachments) return;
+
 		const mdFiles = this.vault.getFiles().filter(f =>
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/'),
 		);

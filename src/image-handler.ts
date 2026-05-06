@@ -15,6 +15,10 @@ export interface AttachmentOptions {
 	linkFormat: LinkFormat;
 	/** 同步根目录（用于 subfolder/samename 模式）/ Sync root dir (for subfolder/samename modes) */
 	syncFolder: string;
+	/** 是否下载附件 / Whether to download attachments */
+	downloadAttachments: boolean;
+	/** 附件大小上限字节数（0 = 不限制）/ Attachment size limit in bytes (0 = no limit) */
+	attachmentSizeLimitBytes: number;
 }
 
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────
@@ -75,6 +79,8 @@ export class ImageHandler {
 	 * @param opts          附件选项 / Attachment options
 	 */
 	async processContent(content: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+		if (!opts.downloadAttachments) return content;
+
 		const matches: Array<{ full: string; alt: string; url: string }> = [];
 		let match: RegExpExecArray | null;
 		const regex = new RegExp(IMG_URL_REGEX.source, 'g');
@@ -97,6 +103,15 @@ export class ImageHandler {
 			if (!url) continue;
 
 			try {
+				// 大小限制检查 / Size limit check
+				if (opts.attachmentSizeLimitBytes > 0) {
+					const exceeds = await this.exceedsSizeLimit(url, opts.attachmentSizeLimitBytes);
+					if (exceeds) {
+						console.debug(`IMA Sync: 图片超过大小限制，保留原链接 / Image exceeds size limit, keeping link: ${url}`);
+						continue;
+					}
+				}
+
 				const filename = this.urlToFilename(url, i);
 				const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
@@ -169,6 +184,8 @@ export class ImageHandler {
 	 * Download a single image, save to attachment folder, return formatted link
 	 */
 	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+		if (!opts.downloadAttachments) return `![image](${url})`;
+
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await this.ensureFolder(attachmentFolder);
 
@@ -283,6 +300,23 @@ export class ImageHandler {
 	/** 清理文件名中的非法字符 / Sanitize illegal characters in filename */
 	private sanitizeFilename(name: string): string {
 		return name.replace(/[/\\:*?"<>|]/g, '_').trim();
+	}
+
+	/** HEAD 请求检查附件是否超过大小限制 / HEAD request to check if attachment exceeds size limit */
+	private async exceedsSizeLimit(url: string, limitBytes: number): Promise<boolean> {
+		try {
+			const response = await requestUrl({
+				url,
+				method: 'HEAD',
+				headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
+				throw: false,
+			});
+			const contentLength = response.headers?.['content-length'];
+			if (contentLength && Number(contentLength) > limitBytes) {
+				return true;
+			}
+		} catch { /* HEAD 失败时不阻止下载 / Don't block download if HEAD fails */ }
+		return false;
 	}
 
 	/** 下载图片并写入 vault / Download image and write to vault */

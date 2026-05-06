@@ -22,11 +22,16 @@ export type LinkFormat = 'auto' | 'wikilink' | 'markdown';
  *  mark-deleted: 保留但标记 [deleted] / Keep but mark [deleted] */
 export type SyncDeleteMode = 'delete' | 'keep' | 'mark-deleted';
 
+// ─── 附件大小限制单位 / Attachment size limit unit ──────────────────────────
+export type AttachmentSizeUnit = 'KB' | 'MB' | 'GB';
+
+// ─── SecretStorage 密钥 ID / SecretStorage key IDs ──────────────────────────
+/** SecretStorage 中存储 Client ID 的密钥名 / Key name for Client ID in SecretStorage */
+export const SECRET_ID_CLIENT = 'ima-client-id';
+/** SecretStorage 中存储 API Key 的密钥名 / Key name for API Key in SecretStorage */
+export const SECRET_ID_API_KEY = 'ima-api-key';
+
 export interface ImaPluginSettings {
-	/** IMA OpenAPI Client ID */
-	clientId: string;
-	/** IMA OpenAPI API Key */
-	apiKey: string;
 	/** vault 内的同步文件夹名 / Sync folder name within vault */
 	syncFolder: string;
 	/** 自动同步间隔（分钟）/ Auto sync interval in minutes */
@@ -52,11 +57,15 @@ export interface ImaPluginSettings {
 	linkFormat: LinkFormat;
 	/** 知识库删除同步模式 / KB delete sync mode */
 	syncDeleteMode: SyncDeleteMode;
+	/** 是否下载附件（图片、PDF 等）/ Whether to download attachments (images, PDF, etc.) */
+	downloadAttachments: boolean;
+	/** 附件大小限制值（0 = 不限制）/ Attachment size limit value (0 = no limit) */
+	attachmentSizeLimit: number;
+	/** 附件大小限制单位 / Attachment size limit unit */
+	attachmentSizeLimitUnit: AttachmentSizeUnit;
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
-	clientId: '',
-	apiKey: '',
 	syncFolder: 'ima',
 	syncIntervalMinutes: 60,
 	syncNotes: true,
@@ -68,6 +77,9 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	attachmentSubfolderName: 'attachments',
 	linkFormat: 'auto',
 	syncDeleteMode: 'delete',
+	downloadAttachments: false,
+	attachmentSizeLimit: 0,
+	attachmentSizeLimitUnit: 'MB',
 };
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
@@ -110,6 +122,11 @@ export class ImaSettingTab extends PluginSettingTab {
 						text: '凭证格式：API Key: xxx\\nClient ID: xxx',
 						attr: { style: 'color: var(--text-muted); font-size: 0.85em;' },
 					});
+					frag.createEl('br');
+					frag.createEl('span', {
+						text: '凭证将安全存储于 Obsidian 钥匙串中，不会以明文保存在配置文件里。',
+						attr: { style: 'color: var(--text-muted); font-size: 0.85em;' },
+					});
 				}),
 			)
 			.addButton(btn =>
@@ -134,30 +151,29 @@ export class ImaSettingTab extends PluginSettingTab {
 							return;
 						}
 
-						if (apiKeyMatch) {
-							this.plugin.settings.apiKey = apiKeyMatch[1]?.trim() ?? '';
-						}
+						// 写入 SecretStorage 而非 data.json / Write to SecretStorage instead of data.json
 						if (clientIdMatch) {
-							this.plugin.settings.clientId = clientIdMatch[1]?.trim() ?? '';
+							this.app.secretStorage.setSecret(SECRET_ID_CLIENT, clientIdMatch[1]?.trim() ?? '');
+						}
+						if (apiKeyMatch) {
+							this.app.secretStorage.setSecret(SECRET_ID_API_KEY, apiKeyMatch[1]?.trim() ?? '');
 						}
 
-						await this.plugin.saveSettings();
 						// 刷新页面以更新输入框显示 / Refresh page to update input display
 						this.display();
-						new Notice('凭证已填入');
+						new Notice('凭证已配置至安全存储');
 					}),
 			);
 
 		new Setting(credBox)
 			.setName('Client ID')
-			.setDesc('IMA OpenAPI 的 Client ID')
+			.setDesc('IMA OpenAPI 的 Client ID（安全存储于 Obsidian 钥匙串）')
 			.addText(text => {
 				text
 					.setPlaceholder('输入 Client ID')
-					.setValue(this.plugin.settings.clientId)
+					.setValue(this.app.secretStorage.getSecret(SECRET_ID_CLIENT) ?? '')
 					.onChange(async value => {
-						this.plugin.settings.clientId = value.trim();
-						await this.plugin.saveSettings();
+						this.app.secretStorage.setSecret(SECRET_ID_CLIENT, value.trim());
 					});
 				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
 				text.inputEl.addClass('ima-input-wide');
@@ -165,14 +181,13 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(credBox)
 			.setName('API Key')
-			.setDesc('IMA OpenAPI 的 API Key')
+			.setDesc('IMA OpenAPI 的 API Key（安全存储于 Obsidian 钥匙串）')
 			.addText(text => {
 				text
 					.setPlaceholder('输入 API Key')
-					.setValue(this.plugin.settings.apiKey)
+					.setValue(this.app.secretStorage.getSecret(SECRET_ID_API_KEY) ?? '')
 					.onChange(async value => {
-						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
+						this.app.secretStorage.setSecret(SECRET_ID_API_KEY, value.trim());
 					});
 				// 隐藏输入内容 / Hide input content
 				text.inputEl.type = 'password';
@@ -189,7 +204,8 @@ export class ImaSettingTab extends PluginSettingTab {
 				btn
 					.setButtonText('测试')
 					.onClick(async () => {
-						const { clientId, apiKey } = this.plugin.settings;
+						const clientId = this.app.secretStorage.getSecret(SECRET_ID_CLIENT);
+						const apiKey = this.app.secretStorage.getSecret(SECRET_ID_API_KEY);
 						if (!clientId || !apiKey) {
 							new Notice('请先填写 Client ID 和 API Key');
 							return;
@@ -289,7 +305,8 @@ export class ImaSettingTab extends PluginSettingTab {
 						return;
 					}
 
-					const { clientId, apiKey } = this.plugin.settings;
+					const clientId = this.app.secretStorage.getSecret(SECRET_ID_CLIENT);
+					const apiKey = this.app.secretStorage.getSecret(SECRET_ID_API_KEY);
 					if (!clientId || !apiKey) {
 						new Notice('请先填写 Client ID 和 API Key');
 						return;
@@ -431,6 +448,55 @@ export class ImaSettingTab extends PluginSettingTab {
 							await this.plugin.saveSettings();
 						});
 				});
+
+			// ── 附件下载设置 / Attachment download settings ──────────────────────
+
+			let sizeLimitContainer: HTMLDivElement | null = null;
+
+			new Setting(containerEl)
+				.setName('下载附件')
+				.setDesc('将图片、PDF 等附件下载到本地（关闭则保留原始链接）')
+				.addToggle(toggle =>
+					toggle
+						.setValue(this.plugin.settings.downloadAttachments)
+						.onChange(async value => {
+							this.plugin.settings.downloadAttachments = value;
+							await this.plugin.saveSettings();
+							if (sizeLimitContainer) {
+								sizeLimitContainer.toggleClass('ima-hidden', !value);
+							}
+						}),
+				);
+
+			sizeLimitContainer = containerEl.createDiv();
+			if (!this.plugin.settings.downloadAttachments) {
+				sizeLimitContainer.addClass('ima-hidden');
+			}
+
+			new Setting(sizeLimitContainer)
+				.setName('附件大小限制')
+				.setDesc('超过限制的附件保留原始链接，不下载（0 = 不限制）')
+				.addText(text =>
+					text
+						.setPlaceholder('0')
+						.setValue(String(this.plugin.settings.attachmentSizeLimit))
+						.onChange(async value => {
+							const num = parseFloat(value);
+							this.plugin.settings.attachmentSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
+							await this.plugin.saveSettings();
+						}),
+				)
+				.addDropdown(drop =>
+					drop
+						.addOption('KB', 'KB')
+						.addOption('MB', 'MB')
+						.addOption('GB', 'GB')
+						.setValue(this.plugin.settings.attachmentSizeLimitUnit)
+						.onChange(async value => {
+							this.plugin.settings.attachmentSizeLimitUnit = value as AttachmentSizeUnit;
+							await this.plugin.saveSettings();
+						}),
+				);
 
 		// ── 手动同步 / Manual sync ──────────────────────────────────────────
 

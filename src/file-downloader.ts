@@ -37,6 +37,16 @@ export class FileDownloader {
 	}): Promise<DownloadResult> {
 		const { url, headers, filename, noteFilePath, opts, isImage = false } = params;
 
+		// 大小限制检查 / Size limit check
+		if (opts.attachmentSizeLimitBytes > 0) {
+			const exceeds = await this.exceedsSizeLimit(url, opts.attachmentSizeLimitBytes, headers);
+			if (exceeds) {
+				console.debug(`IMA Sync: 附件超过大小限制，保留原链接 / Attachment exceeds size limit, keeping link: ${url}`);
+				const linkText = isImage ? `![${filename}](${url})` : `[${filename}](${url})`;
+				return { localPath: '', linkText };
+			}
+		}
+
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await this.ensureFolder(attachmentFolder);
 
@@ -269,6 +279,23 @@ export class FileDownloader {
 	/** 清理文件名 / Sanitize filename */
 	private sanitizeFilename(name: string): string {
 		return name.replace(/[/\\:*?"<>|]/g, '_').trim();
+	}
+
+	/** HEAD 请求检查附件是否超过大小限制 / HEAD request to check if attachment exceeds size limit */
+	private async exceedsSizeLimit(url: string, limitBytes: number, extraHeaders?: Record<string, string>): Promise<boolean> {
+		try {
+			const response = await requestUrl({
+				url,
+				method: 'HEAD',
+				headers: { 'User-Agent': CHROME_UA, ...extraHeaders },
+				throw: false,
+			});
+			const contentLength = response.headers?.['content-length'];
+			if (contentLength && Number(contentLength) > limitBytes) {
+				return true;
+			}
+		} catch { /* HEAD 失败时不阻止下载 / Don't block download if HEAD fails */ }
+		return false;
 	}
 
 	/** 确保文件夹存在 / Ensure folder exists */

@@ -1,5 +1,5 @@
 import { Plugin, Notice } from 'obsidian';
-import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab } from './settings';
+import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
 
@@ -23,6 +23,7 @@ export default class ImaPlugin extends Plugin {
 			this.app.vault,
 			this.settings,
 			() => this.saveSettings(),
+			() => this.resolveCredentials(),
 		);
 
 		// ── Ribbon 手动同步按钮 / Ribbon manual sync button ─────────────────
@@ -75,6 +76,16 @@ export default class ImaPlugin extends Plugin {
 		await this.saveData(this.settings);
 		// 设置保存时同步更新日志开关 / Sync debug log toggle when settings saved
 		setDebugLogEnabled(this.settings.enableDebugLog);
+	}
+
+	/**
+	 * 从 SecretStorage 解析凭证 / Resolve credentials from SecretStorage
+	 */
+	resolveCredentials(): { clientId: string | null; apiKey: string | null } {
+		return {
+			clientId: this.app.secretStorage.getSecret(SECRET_ID_CLIENT),
+			apiKey: this.app.secretStorage.getSecret(SECRET_ID_API_KEY),
+		};
 	}
 
 	/**
