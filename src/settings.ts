@@ -16,6 +16,12 @@ export type AttachmentPathMode = 'subfolder' | 'obsidian' | 'samename';
  *  markdown: 标准 Markdown 格式 ![alt](path) / Standard Markdown format */
 export type LinkFormat = 'auto' | 'wikilink' | 'markdown';
 
+// ─── 知识库删除同步模式 / KB delete sync mode ────────────────────────────────
+/** delete: 删除本地文件 / Delete local file
+ *  keep: 保留本地文件 / Keep local file
+ *  mark-deleted: 保留但标记 [deleted] / Keep but mark [deleted] */
+export type SyncDeleteMode = 'delete' | 'keep' | 'mark-deleted';
+
 export interface ImaPluginSettings {
 	/** IMA OpenAPI Client ID */
 	clientId: string;
@@ -27,7 +33,7 @@ export interface ImaPluginSettings {
 	syncIntervalMinutes: number;
 	/** 是否同步 IMA 笔记 / Whether to sync IMA notes */
 	syncNotes: boolean;
-	/** 是否同步知识库（笔记类条目）/ Whether to sync knowledge base (note-type items) */
+	/** 是否同步知识库 / Whether to sync knowledge base */
 	syncKnowledgeBase: boolean;
 	/** 要同步的知识库 ID / Knowledge base ID to sync */
 	knowledgeBaseId: string;
@@ -44,6 +50,8 @@ export interface ImaPluginSettings {
 	attachmentSubfolderName: string;
 	/** 图片引用链接格式 / Image link format */
 	linkFormat: LinkFormat;
+	/** 知识库删除同步模式 / KB delete sync mode */
+	syncDeleteMode: SyncDeleteMode;
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
@@ -59,6 +67,7 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	attachmentPathMode: 'subfolder',
 	attachmentSubfolderName: 'attachments',
 	linkFormat: 'auto',
+	syncDeleteMode: 'delete',
 };
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
@@ -216,7 +225,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('同步知识库')
-			.setDesc('同步知识库中的笔记类条目（仅支持笔记类型，其他格式如 PDF、网页暂不支持）')
+			.setDesc('同步知识库中的条目（支持笔记、网页、微信文章、PDF、Word 等多种类型）')
 			.addToggle(toggle =>
 				toggle
 					.setValue(this.plugin.settings.syncKnowledgeBase)
@@ -405,6 +414,23 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+			// ── 知识库删除同步 / KB delete sync ────────────────────────────────
+
+			new Setting(containerEl)
+				.setName('知识库删除同步')
+				.setDesc('IMA 知识库中删除条目后，本地文件的处理方式')
+				.addDropdown(drop => {
+					drop
+						.addOption('delete', '删除本地文件')
+						.addOption('keep', '保留本地文件')
+						.addOption('mark-deleted', '标记 [deleted]（保留文件，标题加后缀）')
+						.setValue(this.plugin.settings.syncDeleteMode)
+						.onChange(async value => {
+							this.plugin.settings.syncDeleteMode = value as SyncDeleteMode;
+							await this.plugin.saveSettings();
+						});
+				});
 
 		// ── 手动同步 / Manual sync ──────────────────────────────────────────
 

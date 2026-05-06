@@ -1,20 +1,32 @@
-import { Vault, Notice, normalizePath, TFile } from 'obsidian';
+import { App, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
 import type { ImaPluginSettings } from './settings';
 import type { AttachmentOptions } from './image-handler';
+import type { KnowledgeInfo } from './ima-client';
 import { ImaClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { JsonToMarkdown } from './json-to-md';
+import { convertHtmlToMarkdown } from './html-to-md';
+import { FileDownloader } from './file-downloader';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
+
+const MEDIA_TYPE_LABELS: Record<number, string> = {
+	1: 'PDF', 2: '网页', 3: 'Word 文档', 4: 'PPT', 5: 'Excel',
+	6: '微信公众号文章', 7: 'Markdown', 9: '图片', 11: '笔记',
+	13: 'TXT', 14: 'Xmind',
+};
+
+const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
 
 export class SyncManager {
 	private client: ImaClient;
 	private imageHandler: ImageHandler;
 	private jsonToMd: JsonToMarkdown;
-	/** 防止并发执行 / Prevent concurrent execution */
+	private fileDownloader: FileDownloader;
 	private isSyncing = false;
 
 	constructor(
+		private readonly app: App,
 		private readonly vault: Vault,
 		private readonly settings: ImaPluginSettings,
 		private readonly saveSettings: () => Promise<void>,
@@ -22,22 +34,16 @@ export class SyncManager {
 		this.client = new ImaClient(settings.clientId, settings.apiKey);
 		this.imageHandler = new ImageHandler(vault);
 		this.jsonToMd = new JsonToMarkdown(this.imageHandler);
+		this.fileDownloader = new FileDownloader(vault);
 	}
 
-	/**
-	 * 重建 client（设置变更后调用）
-	 * Rebuild client (call after settings change)
-	 */
 	rebuildClient(): void {
 		this.client = new ImaClient(this.settings.clientId, this.settings.apiKey);
 		this.imageHandler = new ImageHandler(this.vault);
 		this.jsonToMd = new JsonToMarkdown(this.imageHandler);
+		this.fileDownloader = new FileDownloader(this.vault);
 	}
 
-	/**
-	 * 执行一次同步
-	 * Execute one sync cycle
-	 */
 	async syncOnce(): Promise<void> {
 		if (this.isSyncing) {
 			new Notice('IMA Sync: 同步正在进行中，请稍候');
@@ -64,28 +70,22 @@ export class SyncManager {
 		}
 	}
 
-	/**
-	 * 迁移同步文件夹：将 oldFolder 重命名为 newFolder
-	 * Migrate sync folder: rename oldFolder to newFolder
-	 */
 	async migrateSyncFolder(oldFolder: string, newFolder: string): Promise<void> {
 		const old = normalizePath(oldFolder);
 		const neu = normalizePath(newFolder);
 		if (old === neu) return;
 
 		const oldExists = await this.vault.adapter.exists(old);
-		if (!oldExists) return; // 旧目录不存在，无需迁移 / Old dir doesn't exist, nothing to migrate
+		if (!oldExists) return;
 
 		const newExists = await this.vault.adapter.exists(neu);
 		if (newExists) {
 			throw new Error(`目标文件夹 "${newFolder}" 已存在，无法迁移 / Target folder "${newFolder}" already exists`);
 		}
 
-		// vault.adapter.rename 对文件夹同样有效 / vault.adapter.rename also works on folders
 		await this.vault.adapter.rename(old, neu);
 	}
 
-	/** 构建附件选项 / Build attachment options */
 	private buildAttachmentOptions(): AttachmentOptions {
 		return {
 			pathMode: this.settings.attachmentPathMode,
@@ -100,12 +100,11 @@ export class SyncManager {
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const opts = this.buildAttachmentOptions();
 
-		// 确保同步根目录存在 / Ensure sync root folder exists
 		await this.ensureFolder(syncFolder);
 
 		let syncedCount = 0;
 
-		// ── 同步 IMA 笔记 / Sync IMA notes ──────────────────────────────────
+		// ── 同步 IMA 笔记 / Sync IMA notes ──
 		if (this.settings.syncNotes) {
 			const notes = await this.client.listAllNotes(this.settings.lastSyncTime);
 			for (const note of notes) {
@@ -122,7 +121,7 @@ export class SyncManager {
 			}
 		}
 
-		// ── 同步知识库 / Sync knowledge base ────────────────────────────────
+		// ── 同步知识库 / Sync knowledge base ──
 		if (this.settings.syncKnowledgeBase) {
 			const kbId = this.settings.knowledgeBaseId.trim();
 			if (!kbId) {
@@ -131,46 +130,39 @@ export class SyncManager {
 				const kbFolder = normalizePath(`${syncFolder}/知识库`);
 				await this.ensureFolder(kbFolder);
 
+				// 扫描已有文件，构建 media_id → filePath 映射（增量同步判重，零 I/O）
+				// Scan existing files, build media_id → filePath map (incremental sync dedup, zero I/O)
+				const existingMap = this.scanExistingKbFiles(kbFolder);
+
 				const items = await this.client.listAllKnowledgeItems(kbId);
+
+				// ── 删除同步：本地有但 API 没有 → 按设置处理 / Delete sync ──
+				const apiMediaIds = new Set(items.map(i => i.media_id));
+				for (const [mediaId, filePath] of existingMap) {
+					if (!apiMediaIds.has(mediaId)) {
+						try {
+							await this.handleDeletedItem(filePath, opts);
+						} catch (err) {
+							console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+						}
+						existingMap.delete(mediaId);
+					}
+				}
+
+				// ── 增量同步：API 有但本地没有 → 新建 / Incremental sync ──
 				for (const item of items) {
 					try {
+						// 条目不可变，已存在则跳过 / Items are immutable, skip if exists
+						if (existingMap.has(item.media_id)) continue;
+
 						const filename = this.sanitizeFilename(item.title || item.media_id);
-						let filePath: string;
-						let content: string;
+						const filePath = normalizePath(`${kbFolder}/${filename}.md`);
 
-						if (item.media_type === 11) {
-							// ── 笔记类型：提取 doc_id，通过 Notes API 获取内容
-							// ── Note type: extract doc_id, get content via Notes API
-							const docId = this.client.extractDocIdFromMediaId(item.media_id);
-							if (!docId) {
-								console.warn(`IMA Sync: 无法从 media_id 提取 docId: ${item.media_id}`);
-								continue;
-							}
-							filePath = normalizePath(`${kbFolder}/${filename}.md`);
-							const rawJson = await this.client.getNoteContent(docId);
-							content = await this.jsonToMd.convert(rawJson, filePath, opts);
-						} else if (item.media_type === 6 || item.media_type === 2) {
-							// ── 微信文章 / 网页：IMA API 不提供原始 URL 或正文，只记录标题作为占位
-							// ── WeChat article / Webpage: IMA API does not expose original URL or content, record title as placeholder
-							const typeLabel = item.media_type === 6 ? '微信公众号文章' : '网页';
-							content = `> 此条目为${typeLabel}，IMA API 不支持直接导出原文。\n\n**标题**: ${item.title}`;
-							filePath = normalizePath(`${kbFolder}/${filename}.md`);
-						} else if (item.media_type === 3 || item.media_type === 1 || item.media_type === 4 || item.media_type === 5 || item.media_type === 13 || item.media_type === 14) {
-							// ── 文件类型（Word/PDF/PPT/Excel/TXT/Xmind）：创建占位文件
-							// ── File type (Word/PDF/PPT/Excel/TXT/Xmind): create placeholder
-							const typeNames: Record<number, string> = {
-								1: 'PDF', 3: 'Word 文档', 4: 'PPT', 5: 'Excel', 13: 'TXT', 14: 'Xmind',
-							};
-							const typeName = typeNames[item.media_type] ?? '文件';
-							content = `> 此条目为 ${typeName}，暂不支持自动同步文件内容。\n\n**标题**: ${item.title}`;
-							filePath = normalizePath(`${kbFolder}/${filename}.md`);
-						} else {
-							// 未知类型，跳过 / Unknown type, skip
-							continue;
+						const content = await this.syncKnowledgeItem(item, filePath, opts);
+						if (content !== null) {
+							await this.writeNote(filePath, content, opts);
+							syncedCount++;
 						}
-
-						await this.writeNote(filePath, content, opts);
-						syncedCount++;
 					} catch (err) {
 						console.warn(`IMA Sync: 知识库条目 "${item.title}" 同步失败`, err);
 					}
@@ -178,14 +170,340 @@ export class SyncManager {
 			}
 		}
 
-		// ── 修复残留外链图片 / Fix leftover external image links ─────────────
+		// ── 修复残留外链图片 / Fix leftover external image links ──
 		await this.fixPendingImages(syncFolder, opts);
 
-		// 更新最后同步时间 / Update last sync time
 		this.settings.lastSyncTime = Date.now();
 		await this.saveSettings();
 
 		return syncedCount;
+	}
+
+	/**
+	 * 扫描知识库文件夹下已有 .md 文件，从 metadataCache 提取 media_id（零 I/O）
+	 * Scan existing KB .md files, extract media_id from metadataCache (zero I/O)
+	 */
+	private scanExistingKbFiles(kbFolder: string): Map<string, string> {
+		const map = new Map<string, string>();
+		const mdFiles = this.vault.getFiles().filter(f =>
+			f.extension === 'md' && f.path.startsWith(kbFolder + '/'),
+		);
+
+		for (const file of mdFiles) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			const mediaId = cache?.frontmatter?.media_id;
+			if (mediaId) {
+				map.set(String(mediaId), file.path);
+			}
+		}
+
+		return map;
+	}
+
+	/**
+	 * 处理 IMA 端已删除的知识库条目：按 syncDeleteMode 设置执行删除/保留/标记
+	 * Handle KB items deleted from IMA: delete/keep/mark per syncDeleteMode setting
+	 */
+	private async handleDeletedItem(filePath: string, opts: AttachmentOptions): Promise<void> {
+		const file = this.vault.getFileByPath(filePath);
+		if (!(file instanceof TFile)) return;
+
+		const mode = this.settings.syncDeleteMode;
+
+		if (mode === 'delete') {
+			const oldContent = await this.vault.read(file);
+			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
+			await this.cleanOrphanImages(oldPaths, filePath);
+			await this.vault.delete(file);
+			console.debug(`IMA Sync: 删除已移除条目 / Deleted removed item: ${filePath}`);
+		} else if (mode === 'mark-deleted') {
+			// 已标记则跳过 / Skip if already marked
+			if (filePath.includes('[deleted]')) return;
+			const newFilePath = filePath.replace(/\.md$/, ' [deleted].md');
+			try {
+				await this.vault.adapter.rename(filePath, newFilePath);
+			} catch (renameErr) {
+				console.warn(`IMA Sync: 标记删除重命名失败 / Mark-deleted rename failed: ${filePath}`, renameErr);
+				return;
+			}
+			// 在 frontmatter 中加上 sync_status: deleted
+			// Add sync_status: deleted to frontmatter
+			const renamedFile = this.vault.getFileByPath(newFilePath);
+			if (renamedFile instanceof TFile) {
+				const content = await this.vault.read(renamedFile);
+				const updated = this.prependFrontmatterField(content, 'sync_status', 'deleted');
+				await this.vault.modify(renamedFile, updated);
+			}
+			console.debug(`IMA Sync: 标记已删除条目 / Marked deleted item: ${newFilePath}`);
+		}
+		// 'keep' → 不做任何操作 / Do nothing
+	}
+
+	/**
+	 * 同步单个知识库条目：通过 get_media_info 获取访问信息，按类型分发处理
+	 * Sync a single KB item: get access info via get_media_info, dispatch by type
+	 */
+	private async syncKnowledgeItem(
+		item: KnowledgeInfo,
+		filePath: string,
+		opts: AttachmentOptions,
+	): Promise<string | null> {
+		try {
+			const mediaInfo = await this.client.getMediaInfo(item.media_id);
+
+			// ── 分支 A：笔记类型 ──
+			if (mediaInfo.media_type === 11 && mediaInfo.notebook_ext_info?.notebook_id) {
+				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
+				const rawJson = await this.client.getNoteContent(notebookId);
+				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts);
+				// 笔记类型也加上 media_id frontmatter / Add media_id frontmatter for note type too
+				return this.prependMediaIdFrontmatter(mdContent, item.media_id);
+			}
+
+			// ── 分支 B：url_info 中有可访问的 URL ──
+			if (mediaInfo.url_info?.url) {
+				const { url, headers } = mediaInfo.url_info;
+				return await this.syncByMediaType(item.media_type, url, headers, item.title, filePath, opts, item.media_id);
+			}
+
+			// ── 分支 C：无可访问内容，fallback 到占位符 ──
+			return this.buildPlaceholder(item);
+		} catch (err) {
+			console.warn(`IMA Sync: get_media_info 失败，使用占位符 / get_media_info failed, using placeholder: ${item.media_id}`, err);
+			return this.buildPlaceholder(item);
+		}
+	}
+
+	/**
+	 * 在内容前插入 media_id frontmatter（若内容已有 frontmatter 则合并进去）
+	 * Prepend media_id frontmatter (merge into existing frontmatter if present)
+	 */
+	private prependMediaIdFrontmatter(content: string, mediaId: string): string {
+		if (content.startsWith('---')) {
+			// 已有 frontmatter，在闭合 --- 前插入 media_id
+			// Existing frontmatter, insert media_id before closing ---
+			const closeIdx = content.indexOf('---', 3);
+			if (closeIdx > 0) {
+				return content.slice(0, closeIdx) + `media_id: "${mediaId}"\n` + content.slice(closeIdx);
+			}
+		}
+		// 无 frontmatter，创建 / No frontmatter, create one
+		return `---\nmedia_id: "${mediaId}"\n---\n\n${content}`;
+	}
+
+	/**
+	 * 在 frontmatter 中插入一个字段（若已有 frontmatter 则合并，否则新建）
+	 * Insert a field into frontmatter (merge if exists, create if not)
+	 */
+	private prependFrontmatterField(content: string, key: string, value: string): string {
+		if (content.startsWith('---')) {
+			const closeIdx = content.indexOf('---', 3);
+			if (closeIdx > 0) {
+				return content.slice(0, closeIdx) + `${key}: "${value}"\n` + content.slice(closeIdx);
+			}
+		}
+		return `---\n${key}: "${value}"\n---\n\n${content}`;
+	}
+
+	/**
+	 * 根据 media_type 分发处理
+	 * Dispatch by media_type
+	 */
+	private async syncByMediaType(
+		mediaType: number,
+		url: string,
+		headers: Record<string, string> | undefined,
+		title: string,
+		filePath: string,
+		opts: AttachmentOptions,
+		mediaId: string,
+	): Promise<string> {
+		if (mediaType === 2 || mediaType === 6) {
+			return await this.syncWebContent(url, headers, title, mediaType === 6, mediaId);
+		}
+
+		if (mediaType === 9) {
+			return await this.syncFileDownload(url, headers, title, filePath, opts, true, mediaId);
+		}
+
+		if (FILE_MEDIA_TYPES.has(mediaType)) {
+			return await this.syncFileDownload(url, headers, title, filePath, opts, false, mediaId);
+		}
+
+		return this.buildPlaceholder({ media_id: mediaId, title, parent_folder_id: '', media_type: mediaType });
+	}
+
+	/**
+	 * 抓取网页内容并转为 Markdown（含 YAML frontmatter）
+	 * Fetch webpage content and convert to Markdown (with YAML frontmatter)
+	 */
+	private async syncWebContent(
+		url: string,
+		headers: Record<string, string> | undefined,
+		title: string,
+		isWeChat: boolean,
+		mediaId: string,
+	): Promise<string> {
+		try {
+			const requestHeaders: Record<string, string> = {
+				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+				...headers,
+			};
+
+			const response = await requestUrl({
+				url,
+				method: 'GET',
+				headers: requestHeaders,
+				throw: false,
+			});
+
+			if (response.status >= 400) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+
+			const html = response.text;
+			const result = convertHtmlToMarkdown(html, {
+				url,
+				contentSelector: isWeChat ? '#js_content' : undefined,
+			});
+
+			const frontmatter = this.buildWebFrontmatter(url, result.author, result.published, mediaId);
+
+			const parts: string[] = [frontmatter];
+			const effectiveTitle = result.title || title;
+			if (effectiveTitle) {
+				parts.push(`# ${effectiveTitle}\n`);
+			}
+			if (result.content) {
+				parts.push(result.content);
+			} else {
+				parts.push(`> 无法提取网页正文，请访问原文：[链接](${url})`);
+			}
+			return parts.join('\n');
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return `> 网页内容获取失败：${msg}\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
+		}
+	}
+
+	/**
+	 * 构建网页条目的 YAML frontmatter
+	 * Build YAML frontmatter for web content items
+	 */
+	private buildWebFrontmatter(source: string, author: string, published: string, mediaId: string): string {
+		const lines: string[] = ['---'];
+		lines.push(`source: "${source}"`);
+		lines.push(`media_id: "${mediaId}"`);
+
+		if (author) {
+			lines.push('author:');
+			lines.push(`  - "[[${author}]]"`);
+		}
+
+		if (published) {
+			const formatted = this.formatDateTime(published);
+			if (formatted) {
+				lines.push(`published: ${formatted}`);
+			}
+		}
+
+		lines.push(`created: ${new Date().toISOString().slice(0, 19)}`);
+		lines.push('---');
+		return lines.join('\n');
+	}
+
+	/**
+	 * 将各种日期格式统一为 YYYY-MM-DD 或 YYYY-MM-DDTHH:mm:ss
+	 * Normalize various date formats to YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss
+	 */
+	private formatDateTime(input: string): string | null {
+		if (!input) return null;
+		try {
+			const date = new Date(input);
+			if (isNaN(date.getTime())) return null;
+			const iso = date.toISOString();
+			if (iso.slice(11, 19) === '00:00:00') {
+				return iso.slice(0, 10);
+			}
+			return iso.slice(0, 19);
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * 下载文件到附件目录，返回包含链接的 Markdown
+	 * Download file to attachment dir, return Markdown with link
+	 */
+	private async syncFileDownload(
+		url: string,
+		headers: Record<string, string> | undefined,
+		title: string,
+		filePath: string,
+		opts: AttachmentOptions,
+		isImage: boolean,
+		mediaId: string,
+	): Promise<string> {
+		try {
+			const filename = this.inferFilenameFromUrl(url, title);
+
+			const result = await this.fileDownloader.downloadFile({
+				url,
+				headers,
+				filename,
+				noteFilePath: filePath,
+				opts,
+				isImage,
+			});
+
+			if (isImage) {
+				return `---\nmedia_id: "${mediaId}"\n---\n\n${result.linkText}`;
+			}
+
+			return `---\nmedia_id: "${mediaId}"\n---\n\n# ${title}\n\n${result.linkText}`;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			const typeLabel = MEDIA_TYPE_LABELS[isImage ? 9 : 0] ?? '文件';
+			return `> ${typeLabel}下载失败：${msg}\n\n**标题**: ${title}`;
+		}
+	}
+
+	/** 从 URL 推断下载文件名 / Infer download filename from URL */
+	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
+		try {
+			const urlObj = new URL(url);
+			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
+			const decoded = decodeURIComponent(lastSegment);
+			if (decoded && decoded.includes('.')) {
+				return decoded.replace(/[/\\:*?"<>|]/g, '_').trim();
+			}
+		} catch { /* ignore */ }
+		const ext = this.guessExtensionFromUrl(url);
+		return `${fallbackTitle.replace(/[/\\:*?"<>|#^[\]]/g, '_').trim().slice(0, 80)}${ext}`;
+	}
+
+	/** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
+	private guessExtensionFromUrl(url: string): string {
+		const lower = url.toLowerCase();
+		if (lower.includes('.pdf')) return '.pdf';
+		if (lower.includes('.doc') || lower.includes('.docx')) return '.docx';
+		if (lower.includes('.ppt') || lower.includes('.pptx')) return '.pptx';
+		if (lower.includes('.xls') || lower.includes('.xlsx')) return '.xlsx';
+		if (lower.includes('.txt')) return '.txt';
+		if (lower.includes('.xmind')) return '.xmind';
+		if (lower.includes('.md') || lower.includes('.markdown')) return '.md';
+		if (lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
+		if (lower.includes('.png')) return '.png';
+		if (lower.includes('.gif')) return '.gif';
+		if (lower.includes('.webp')) return '.webp';
+		return '';
+	}
+
+	/** 构建占位符内容 / Build placeholder content */
+	private buildPlaceholder(item: KnowledgeInfo): string {
+		const typeLabel = MEDIA_TYPE_LABELS[item.media_type] ?? `类型 ${item.media_type}`;
+		return `---\nmedia_id: "${item.media_id}"\n---\n\n> 此条目为${typeLabel}，暂不支持自动同步内容。\n\n**标题**: ${item.title}`;
 	}
 
 	/**
@@ -220,15 +538,11 @@ export class SyncManager {
 	private async writeNote(filePath: string, content: string, opts: AttachmentOptions): Promise<void> {
 		const existing = this.vault.getFileByPath(filePath);
 		if (existing instanceof TFile) {
-			// 读取旧内容，提取旧图片路径集合
-			// Read old content and extract old image paths
 			const oldContent = await this.vault.read(existing);
 			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
 
 			await this.vault.modify(existing, content);
 
-			// 提取新图片路径，对比差集并清理孤儿文件
-			// Extract new image paths, diff and clean orphan files
 			const newPaths = new Set(this.imageHandler.extractLocalImagePaths(content, filePath, opts));
 			const orphans = oldPaths.filter(p => !newPaths.has(p));
 			if (orphans.length > 0) {
@@ -242,14 +556,9 @@ export class SyncManager {
 	/**
 	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
 	 * Check image paths and delete files no longer referenced by any synced note
-	 *
-	 * @param imagePaths  待检查的图片 vault 路径列表 / List of image vault paths to check
-	 * @param skipFile    已在内存中更新、无需重复读取的笔记路径 / Note path already updated in memory, skip re-reading
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
-		// 获取同步文件夹下所有 md 文件（排除刚写入的那篇）
-		// Get all md files under sync folder (excluding the just-written note)
 		const mdFiles = this.vault.getFiles().filter(f =>
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/') && f.path !== skipFile,
 		);
@@ -259,15 +568,11 @@ export class SyncManager {
 				const exists = await this.vault.adapter.exists(imgPath);
 				if (!exists) continue;
 
-				// 搜索是否还有其他笔记引用此图片
-				// Check if any other note still references this image
 				const filename = imgPath.split('/').pop() ?? '';
 				let stillReferenced = false;
 
 				for (const file of mdFiles) {
 					const fileContent = await this.vault.read(file);
-					// wikilink 匹配文件名，markdown 格式匹配编码后路径片段
-					// Match filename for wikilink, encoded path segment for markdown format
 					if (fileContent.includes(`[[${filename}]]`) ||
 						fileContent.includes(`[[${filename}|`) ||
 						fileContent.includes(`(${encodeURIComponent(filename)})`) ||
@@ -289,7 +594,6 @@ export class SyncManager {
 		}
 	}
 
-	/** 确保文件夹存在 / Ensure folder exists */
 	private async ensureFolder(folderPath: string): Promise<void> {
 		const exists = await this.vault.adapter.exists(folderPath);
 		if (!exists) {
@@ -297,12 +601,11 @@ export class SyncManager {
 		}
 	}
 
-	/** 清理文件名中的非法字符 / Sanitize illegal characters in filename */
 	private sanitizeFilename(name: string): string {
 		return name
 			.replace(/[/\\:*?"<>|#^[\]]/g, '_')
 			.replace(/\s+/g, ' ')
 			.trim()
-			.slice(0, 100); // 限制文件名长度 / Limit filename length
+			.slice(0, 100);
 	}
 }

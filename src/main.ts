@@ -19,6 +19,7 @@ export default class ImaPlugin extends Plugin {
 
 		// 初始化同步管理器 / Initialize sync manager
 		this.syncManager = new SyncManager(
+			this.app,
 			this.app.vault,
 			this.settings,
 			() => this.saveSettings(),

@@ -79,6 +79,32 @@ interface ListAddableKBResponse {
 	is_end: boolean;
 }
 
+// get_media_info 响应类型 / get_media_info response types
+
+/** 访问链接信息 / Access URL info */
+export interface URLInfo {
+	url: string;
+	headers?: Record<string, string>;
+}
+
+/** 笔记扩展信息（知识库中笔记类型媒体）/ Notebook extension info (note-type media in KB) */
+export interface NotebookExtInfo {
+	notebook_id: string;
+}
+
+/** get_media_info 响应 / get_media_info response */
+export interface GetMediaInfoResponse {
+	media_type: number;
+	url_info?: URLInfo;
+	notebook_ext_info?: NotebookExtInfo;
+}
+
+interface GetMediaInfoData {
+	media_type: number;
+	url_info?: URLInfo;
+	notebook_ext_info?: NotebookExtInfo;
+}
+
 /** 知识条目 / Knowledge item */
 export interface KnowledgeInfo {
 	media_id: string;
@@ -250,5 +276,21 @@ export class ImaClient {
 		const lastUnder = mediaId.lastIndexOf('_');
 		if (lastUnder < 0) return null;
 		return mediaId.slice(lastUnder + 1);
+	}
+
+	/**
+	 * 获取知识库条目的媒体信息（含访问 URL 或笔记 ID）
+	 * Get media info for a knowledge base item (includes access URL or note ID)
+	 */
+	async getMediaInfo(mediaId: string): Promise<GetMediaInfoResponse> {
+		const data = await this.post<GetMediaInfoData>(
+			'openapi/wiki/v1/get_media_info',
+			{ media_id: mediaId },
+		);
+		return {
+			media_type: data.media_type,
+			url_info: data.url_info,
+			notebook_ext_info: data.notebook_ext_info,
+		};
 	}
 }

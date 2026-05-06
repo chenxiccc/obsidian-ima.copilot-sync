@@ -17,6 +17,7 @@
 		"typescript": "^5.8.3"
 	},
 	"dependencies": {
+		"defuddle": "^0.18.1",
 		"obsidian": "latest"
 	}
 }
