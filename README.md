@@ -22,6 +22,9 @@
 - **图片链接格式**：支持 Obsidian wiki 格式和标准 Markdown 格式
 - **自动定时同步**：按设定间隔自动在后台同步
 - **一键粘贴凭证**：支持从剪贴板自动解析填入 Client ID 和 API Key
+- **安全凭证存储**：凭证存储于 Obsidian 钥匙串（系统 Keychain），不以明文保存在配置文件中
+- **附件下载控制**：可选下载附件或保留原始链接，支持附件大小限制
+- **知识库删除同步**：支持删除/保留/标记三种模式处理 IMA 端已删除的条目
 
 ### 安装方法
 
@@ -47,6 +50,8 @@
 - 直接将复制的凭证文本粘贴到剪贴板，点击「**粘贴并解析凭证**」按钮自动填入
 - 或手动在 Client ID 和 API Key 输入框中分别填写
 
+凭证将安全存储于 Obsidian 钥匙串中，不会以明文保存在配置文件里。
+
 点击「**测试**」按钮验证连接是否正常。
 
 #### 3. 选择同步内容
@@ -59,6 +64,11 @@
 | 同步间隔      | 自动同步的时间间隔（分钟，默认 60）              |
 
 #### 4. 附件设置
+
+| 设置项         | 说明                                               |
+| -------------- | -------------------------------------------------- |
+| 下载附件       | 是否将图片、PDF 等附件下载到本地（关闭则保留原链接） |
+| 附件大小限制   | 超过限制的附件保留原链接，不下载（0 = 不限制）     |
 
 | 模式               | 说明                                                         |
 | ------------------ | ------------------------------------------------------------ |
@@ -104,6 +114,9 @@ An Obsidian plugin to sync notes from [Tencent IMA](https://ima.qq.com) personal
 - **Image link format**: Supports both Obsidian wikilink and standard Markdown formats
 - **Auto periodic sync**: Runs silently in the background on a configurable interval
 - **One-click credential paste**: Parses Client ID and API Key directly from clipboard
+- **Secure credential storage**: Credentials stored in Obsidian keychain (system Keychain), never saved in plaintext
+- **Attachment download control**: Optionally download attachments or keep original links, with size limit support
+- **Knowledge base delete sync**: Three modes (delete/keep/mark) for handling items deleted from IMA
 
 ### Installation
 
@@ -127,6 +140,8 @@ Open Obsidian Settings → IMA Sync:
 - Paste the copied credential text to your clipboard and click **「粘贴并解析凭证」** to auto-fill
 - Or enter the Client ID and API Key manually in their respective fields
 
+Credentials are securely stored in the Obsidian keychain and never saved in plaintext.
+
 Click **「测试」** to verify the connection.
 
 #### 3. Choose what to sync
@@ -139,6 +154,11 @@ Click **「测试」** to verify the connection.
 | Sync Interval       | Auto-sync interval in minutes (default: 60)                       |
 
 #### 4. Attachment settings
+
+| Setting              | Description                                                                  |
+| -------------------- | ---------------------------------------------------------------------------- |
+| Download Attachments | Download images/PDFs locally, or keep original links if disabled              |
+| Size Limit           | Skip download for attachments exceeding the limit (0 = no limit)             |
 
 | Mode                     | Description                                                             |
 | ------------------------ | ----------------------------------------------------------------------- |
