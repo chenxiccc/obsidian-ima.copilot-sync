@@ -129,12 +129,8 @@ export class FileDownloader {
 		// 动态引入 Node.js 模块，移动端不可用时直接抛错
 		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
 		let https: typeof import('https');
-		let path: typeof import('path');
-		let fs: typeof import('fs/promises');
 		try {
 			https = require('https');
-			path = require('path');
-			fs = require('fs/promises');
 		} catch {
 			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
 		}
@@ -163,16 +159,7 @@ export class FileDownloader {
 							console.warn(`IMA Sync: Node.js 下载仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js download only ${buffer.length} bytes, may be anti-hotlink error page`);
 						}
 
-						// 写入临时文件再用 vault adapter 导入
-						// Write to temp file then import via vault adapter
-						const tmpPath = path.join(
-							(this.vault.adapter as unknown as { basePath?: string }).basePath ?? '',
-							'.obsidian', '.tmp-ima-download',
-						);
-						await fs.mkdir(path.dirname(tmpPath), { recursive: true });
-						await fs.writeFile(tmpPath, buffer);
 						await this.vault.adapter.writeBinary(destPath, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer);
-						await fs.unlink(tmpPath).catch(() => {});
 						console.debug(`IMA Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
 						resolve();
 					} catch (err) {

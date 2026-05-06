@@ -18,6 +18,8 @@ const MEDIA_TYPE_LABELS: Record<number, string> = {
 
 const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
 
+const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
 export class SyncManager {
 	private client: ImaClient;
 	private imageHandler: ImageHandler;
@@ -257,7 +259,7 @@ export class SyncManager {
 				const rawJson = await this.client.getNoteContent(notebookId);
 				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts);
 				// 笔记类型也加上 media_id frontmatter / Add media_id frontmatter for note type too
-				return this.prependMediaIdFrontmatter(mdContent, item.media_id);
+				return this.prependFrontmatterField(mdContent, 'media_id', item.media_id);
 			}
 
 			// ── 分支 B：url_info 中有可访问的 URL ──
@@ -272,23 +274,6 @@ export class SyncManager {
 			console.warn(`IMA Sync: get_media_info 失败，使用占位符 / get_media_info failed, using placeholder: ${item.media_id}`, err);
 			return this.buildPlaceholder(item);
 		}
-	}
-
-	/**
-	 * 在内容前插入 media_id frontmatter（若内容已有 frontmatter 则合并进去）
-	 * Prepend media_id frontmatter (merge into existing frontmatter if present)
-	 */
-	private prependMediaIdFrontmatter(content: string, mediaId: string): string {
-		if (content.startsWith('---')) {
-			// 已有 frontmatter，在闭合 --- 前插入 media_id
-			// Existing frontmatter, insert media_id before closing ---
-			const closeIdx = content.indexOf('---', 3);
-			if (closeIdx > 0) {
-				return content.slice(0, closeIdx) + `media_id: "${mediaId}"\n` + content.slice(closeIdx);
-			}
-		}
-		// 无 frontmatter，创建 / No frontmatter, create one
-		return `---\nmedia_id: "${mediaId}"\n---\n\n${content}`;
 	}
 
 	/**
@@ -346,7 +331,7 @@ export class SyncManager {
 	): Promise<string> {
 		try {
 			const requestHeaders: Record<string, string> = {
-				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+				'User-Agent': CHROME_UA,
 				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				...headers,
 			};
