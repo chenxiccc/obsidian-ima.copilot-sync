@@ -111,24 +111,23 @@ export class ImageHandler {
 
 		// 解析 wikilink 格式：![[filename.png]] 或 ![[filename.png|alt]]
 		// Parse wikilink format: ![[filename.png]] or ![[filename.png|alt]]
+		const folder = this.resolveAttachmentFolder(noteFilePath, opts);
 		const wikilinkRegex = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
 		let m: RegExpExecArray | null;
 		while ((m = wikilinkRegex.exec(content)) !== null) {
 			const raw = (m[1] ?? '').trim();
 			if (!raw) continue;
-			const folder = this.resolveAttachmentFolder(noteFilePath, opts);
 			paths.push(normalizePath(`${folder}/${raw}`));
 		}
 
 		// 解析 Markdown 格式本地图片：![alt](path)，跳过外链
-		// Parse Markdown format local images: ![[alt](path), skip external links
+		// Parse Markdown format local images: ![alt](path), skip external links
+		const noteDir = extractNoteDir(noteFilePath);
 		const mdLocalRegex = /!\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g;
 		while ((m = mdLocalRegex.exec(content)) !== null) {
 			const encoded = (m[1] ?? '').trim();
 			if (!encoded) continue;
-			// URL 解码后计算绝对路径 / URL-decode then resolve to absolute path
 			const decoded = encoded.split('/').map(seg => decodeURIComponent(seg)).join('/');
-			const noteDir = extractNoteDir(noteFilePath);
 			paths.push(normalizePath(noteDir ? `${noteDir}/${decoded}` : decoded));
 		}
 

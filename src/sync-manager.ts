@@ -481,11 +481,11 @@ export class SyncManager {
 			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
 			const decoded = decodeURIComponent(lastSegment);
 			if (decoded && decoded.includes('.')) {
-				return decoded.replace(/[/\\:*?"<>|]/g, '_').trim();
+				return sanitizeFilename(decoded);
 			}
 		} catch { /* ignore */ }
 		const ext = this.guessExtensionFromUrl(url);
-		return `${fallbackTitle.replace(/[/\\:*?"<>|#^[\]]/g, '_').trim().slice(0, 80)}${ext}`;
+		return `${sanitizeFilename(fallbackTitle).slice(0, 80)}${ext}`;
 	}
 
 	/** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
@@ -546,8 +546,10 @@ export class SyncManager {
 		const existing = this.vault.getFileByPath(filePath);
 		if (existing instanceof TFile) {
 			const oldContent = await this.vault.read(existing);
-			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
 
+			if (oldContent === content) return;
+
+			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
 			await this.vault.modify(existing, content);
 
 			const newPaths = new Set(this.imageHandler.extractLocalImagePaths(content, filePath, opts));
@@ -563,9 +565,6 @@ export class SyncManager {
 	/**
 	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
 	 * Check image paths and delete files no longer referenced by any synced note
-	 *
-	 * 优化：一次性构建引用索引（O(M+N)），而非逐图逐文件扫描（O(N×M)）
-	 * Optimized: build reference index once (O(M+N)) instead of per-image per-file scan (O(N×M))
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
@@ -573,30 +572,21 @@ export class SyncManager {
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/') && f.path !== skipFile,
 		);
 
-		// 一次性读取所有 md 文件，提取图片引用到 Set（O(M) 次读取）
-		// Read all md files once, extract image references into Set (O(M) reads)
 		const referencedFilenames = new Set<string>();
 		for (const file of mdFiles) {
 			try {
 				const content = await this.vault.read(file);
-				// 提取 wikilink 引用的文件名 / Extract filenames from wikilink references
 				for (const m of content.matchAll(/!\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g)) {
 					referencedFilenames.add(m[1]!);
 				}
-				// 提取 Markdown 链接引用的文件名 / Extract filenames from Markdown link references
 				for (const m of content.matchAll(/!\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g)) {
 					const raw = m[1]!;
-					// 解码后取文件名部分 / Decode and extract filename part
 					const decoded = raw.split('/').map(seg => decodeURIComponent(seg)).join('/');
 					referencedFilenames.add(decoded.split('/').pop() ?? decoded);
 				}
-			} catch {
-				// 读取失败时跳过 / Skip on read failure
-			}
+			} catch { /* skip */ }
 		}
 
-		// 对每张孤儿图片，查 Set 判断是否仍被引用（O(N) 次查表）
-		// For each orphan image, check Set for references (O(N) lookups)
 		for (const imgPath of imagePaths) {
 			try {
 				const exists = await this.vault.adapter.exists(imgPath);

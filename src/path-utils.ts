@@ -8,13 +8,7 @@ export const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 // ─── 文件名清理 / Filename sanitization ──────────────────────────────────────
 
-/**
- * 清理文件名中的非法字符（严格版本）
- * Sanitize illegal characters in filename (strict version)
- *
- * 替换 Windows 非法字符 + Obsidian 特殊字符（# ^ [ ]），压缩空白，截断 100 字符
- * Replace Windows-illegal chars + Obsidian-special chars (# ^ [ ]), compress whitespace, truncate to 100 chars
- */
+/** 清理文件名中的非法字符 / Sanitize illegal characters in filename */
 export function sanitizeFilename(name: string): string {
 	return name
 		.replace(/[/\\:*?"<>|#^[\]]/g, '_')
