@@ -71,7 +71,7 @@ export interface ImaPluginSettings {
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	syncFolder: 'ima',
 	syncIntervalMinutes: 60,
-	syncNotes: true,
+	syncNotes: false,
 	syncKnowledgeBase: false,
 	personalKnowledgeBases: [],
 	lastSyncTime: 0,
@@ -506,11 +506,11 @@ export class ImaSettingTab extends PluginSettingTab {
 		};
 		renderPublicKbList();
 
-		// ── 知识库删除同步 / KB delete sync ────────────────────────────────
+		// ── IMA 删除同步 / IMA delete sync ──────────────────────────────────
 
 		new Setting(containerEl)
-			.setName('知识库删除同步')
-			.setDesc('IMA 知识库中删除条目后，本地文件的处理方式')
+			.setName('IMA 删除同步')
+			.setDesc('IMA 笔记或知识库中删除条目后，本地文件的处理方式')
 			.addDropdown(drop => {
 				drop
 					.addOption('delete', '删除本地文件')

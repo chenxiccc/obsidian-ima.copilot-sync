@@ -135,14 +135,35 @@ export class SyncManager {
 
 		// ── 同步 IMA 笔记 / Sync IMA notes ──
 		if (this.settings.syncNotes && this.client) {
-			const notes = await this.client.listAllNotes(this.settings.lastSyncTime);
-			for (const note of notes) {
+			// 全量拉取，内存过滤增量（对齐知识库模式，一次请求同时服务增量+删除）
+			// Fetch all notes, filter incrementally in memory (align with KB pattern, one request for both)
+			const allNotes = await this.client.listAllNotes(0);
+			const existingMap = this.scanExistingNoteFiles(syncFolder);
+
+			// 删除同步：本地有 docid 但 API 已无 / Delete sync: local has docid but not in API
+			const apiDocIds = new Set(allNotes.map(n => n.docid));
+			for (const [docid, filePath] of existingMap) {
+				if (!apiDocIds.has(docid)) {
+					try {
+						await this.handleDeletedItem(filePath, opts);
+					} catch (err) {
+						console.warn(`IMA Sync: 笔记删除同步失败 / Note delete sync failed for ${filePath}:`, err);
+					}
+					existingMap.delete(docid);
+				}
+			}
+
+			// 增量同步：新笔记，或上次同步后有修改的 / Incremental sync: new or modified since last sync
+			for (const note of allNotes) {
 				try {
+					// modify_time 为秒级，lastSyncTime 为毫秒级 / modify_time is seconds, lastSyncTime is ms
+					if (existingMap.has(note.docid) && note.modify_time * 1000 <= this.settings.lastSyncTime) continue;
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const rawJson = await this.client.getNoteContent(note.docid);
 					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts, filename);
-					await this.writeNote(filePath, processedContent, opts);
+					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${processedContent}`;
+					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
 				} catch (err) {
 					console.warn(`IMA Sync: 笔记 "${note.title}" 同步失败`, err);
@@ -385,6 +406,29 @@ export class SyncManager {
 			const mediaId = cache?.frontmatter?.media_id;
 			if (mediaId) {
 				map.set(String(mediaId), file.path);
+			}
+		}
+
+		return map;
+	}
+
+	/**
+	 * 扫描 syncFolder 根目录下已有 .md 文件，从 metadataCache 提取 docid（零 I/O）
+	 * Scan existing note .md files in syncFolder root, extract docid from metadataCache (zero I/O)
+	 */
+	private scanExistingNoteFiles(syncFolder: string): Map<string, string> {
+		const map = new Map<string, string>();
+		const mdFiles = this.vault.getFiles().filter(f =>
+			f.extension === 'md' &&
+			f.path.startsWith(syncFolder + '/') &&
+			!f.path.slice(syncFolder.length + 1).includes('/'),
+		);
+
+		for (const file of mdFiles) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			const docid = cache?.frontmatter?.docid;
+			if (docid) {
+				map.set(String(docid), file.path);
 			}
 		}
 
