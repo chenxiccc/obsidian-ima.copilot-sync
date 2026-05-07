@@ -190,7 +190,7 @@ export class SyncManager {
 					for (const [mediaId, filePath] of existingMap) {
 						if (!apiMediaIds.has(mediaId)) {
 							try {
-								await this.handleDeletedItem(filePath, opts);
+								await this.handleDeletedItem(filePath, kbOpts);
 							} catch (err) {
 								console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
 							}
@@ -206,7 +206,7 @@ export class SyncManager {
 							const filePath = normalizePath(`${kbFolder}/${filename}.md`);
 							const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
 							if (content !== null) {
-								await this.writeNote(filePath, content, opts);
+								await this.writeNote(filePath, content, kbOpts);
 								syncedCount++;
 							}
 						} catch (err) {
@@ -717,7 +717,10 @@ export class SyncManager {
 				const content = await this.vault.read(file);
 				if (!content.match(/!\[[^\]]*\]\(https?:\/\//)) continue;
 
-				const fixed = await this.imageHandler.processContent(content, file.path, opts, file.basename);
+				// 按文件所在路径推断知识库分类/名称，确保图片存入正确附件子目录
+				// Infer KB category/name from file path so images land in the correct attachment subdirectory
+				const fileOpts = this.inferOptsFromFilePath(file.path, opts);
+				const fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
 				if (fixed !== content) {
 					await this.vault.modify(file, fixed);
 					console.debug(`IMA Sync: 修复图片链接 / Fixed image links in: ${file.path}`);
@@ -726,6 +729,28 @@ export class SyncManager {
 				console.warn(`IMA Sync: 修复图片链接失败 / Failed to fix image links in ${file.path}:`, err);
 			}
 		}
+	}
+
+	/**
+	 * 根据文件路径推断其所属知识库分类和名称，返回含正确 kbCategory/kbName 的 opts
+	 * 路径规则：{syncFolder}/{kbCategory}/{kbName}/xxx.md → kbCategory, kbName
+	 * Infer KB category and name from file path, return opts with correct kbCategory/kbName
+	 * Path rule: {syncFolder}/{kbCategory}/{kbName}/xxx.md → kbCategory, kbName
+	 */
+	private inferOptsFromFilePath(filePath: string, baseOpts: AttachmentOptions): AttachmentOptions {
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		const prefix = syncFolder + '/';
+		if (!filePath.startsWith(prefix)) return baseOpts;
+
+		const relative = filePath.slice(prefix.length);
+		const parts = relative.split('/');
+		// 根目录笔记（单段）或二级目录（知识库直接根目录文件）均无 kbName
+		// Root notes (1 segment) or files directly in category dir (2 segments) have no kbName
+		if (parts.length < 3) return baseOpts;
+
+		const kbCategory = parts[0];
+		const kbName = parts[1];
+		return { ...baseOpts, kbCategory, kbName };
 	}
 
 	/**
