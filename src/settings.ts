@@ -5,12 +5,6 @@ import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
 
 // ─── 设置数据结构 / Settings data structure ────────────────────────────────
 
-// ─── 附件路径模式 / Attachment path mode ────────────────────────────────────
-/** subfolder: 同步目录下固定子文件夹 / Fixed subfolder under sync dir
- *  obsidian: 跟随 Obsidian 附件设置 / Follow Obsidian attachment settings
- *  samename: 同步目录下与笔记同名的文件夹 / Folder named after note under sync dir */
-export type AttachmentPathMode = 'subfolder' | 'obsidian' | 'samename';
-
 // ─── 图片链接格式 / Image link format ────────────────────────────────────────
 /** auto: 跟随 Obsidian 设置 / Follow Obsidian settings
  *  wikilink: Obsidian wiki 格式 ![[file]] / Obsidian wiki format
@@ -43,6 +37,8 @@ export interface ImaPluginSettings {
 	syncKnowledgeBase: boolean;
 	/** 要同步的知识库 ID / Knowledge base ID to sync */
 	knowledgeBaseId: string;
+	/** 要同步的知识库名称（缓存，避免同步时再查 API）/ KB name (cached to avoid API lookup during sync) */
+	knowledgeBaseName: string;
 	/**
 	 * 上次同步时间戳（毫秒），存入 data.json，不展示在 UI 中
 	 * Last sync timestamp in ms, stored in data.json, not shown in UI
@@ -50,10 +46,6 @@ export interface ImaPluginSettings {
 	lastSyncTime: number;
 	/** 是否输出调试日志文件 / Whether to write debug log file */
 	enableDebugLog: boolean;
-	/** 附件保存路径模式 / Attachment save path mode */
-	attachmentPathMode: AttachmentPathMode;
-	/** 附件子文件夹名（subfolder 模式下使用）/ Attachment subfolder name (used in subfolder mode) */
-	attachmentSubfolderName: string;
 	/** 图片引用链接格式 / Image link format */
 	linkFormat: LinkFormat;
 	/** 知识库删除同步模式 / KB delete sync mode */
@@ -74,10 +66,9 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	syncNotes: true,
 	syncKnowledgeBase: false,
 	knowledgeBaseId: '',
+	knowledgeBaseName: '',
 	lastSyncTime: 0,
 	enableDebugLog: false,
-	attachmentPathMode: 'subfolder',
-	attachmentSubfolderName: 'attachments',
 	linkFormat: 'auto',
 	syncDeleteMode: 'delete',
 	downloadAttachments: false,
@@ -298,6 +289,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					const select = async () => {
 						radio.checked = true;
 						this.plugin.settings.knowledgeBaseId = base.kb_id;
+						this.plugin.settings.knowledgeBaseName = base.kb_name;
 						await this.plugin.saveSettings();
 						kbSelectedSetting.setDesc(`当前已选：${base.kb_name}`);
 					};
@@ -309,51 +301,6 @@ export class ImaSettingTab extends PluginSettingTab {
 			if (subscribed.length > 0) {
 				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
 				header.textContent = '我加入的订阅知识库';
-				for (const base of subscribed) {
-					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
-					const checkbox = row.createEl('input') as HTMLInputElement;
-					checkbox.type = 'checkbox';
-					checkbox.className = 'ima-kb-checkbox';
-					checkbox.checked = this.plugin.settings.publicKnowledgeBases.some(
-						p => p.encryptedKbId === base.kb_id,
-					);
-
-					const label = row.createEl('label');
-					label.textContent = `${base.kb_name}`;
-					const infoSpan = label.createEl('span', { cls: 'ima-kb-id' });
-					infoSpan.textContent = `  (${base.content_count} 个内容, ${base.member_count} 人订阅)`;
-
-					const onToggle = async () => {
-						if (checkbox.checked) {
-							// 添加到公共知识库列表 / Add to public KB list
-							this.plugin.settings.publicKnowledgeBases.push({
-								encryptedKbId: base.kb_id,
-								numericKbId: '', // 同步时从 API 获取 / Fetched from API during sync
-								shareId: '',
-								name: base.kb_name,
-								lastSyncTime: 0,
-							});
-						} else {
-							// 从列表移除 / Remove from list
-							this.plugin.settings.publicKnowledgeBases =
-								this.plugin.settings.publicKnowledgeBases.filter(
-									p => p.encryptedKbId !== base.kb_id,
-								);
-						}
-						await this.plugin.saveSettings();
-						renderPublicKbList();
-					};
-					checkbox.addEventListener('change', onToggle);
-					label.addEventListener('click', () => {
-						checkbox.checked = !checkbox.checked;
-						onToggle();
-					});
-				}
-			}
-
-			if (subscribed.length > 0) {
-				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
-				header.textContent = '订阅知识库';
 				for (const base of subscribed) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
 					const checkbox = row.createEl('input') as HTMLInputElement;
@@ -394,6 +341,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					});
 				}
 			}
+
 		};
 
 		kbSelectedSetting.addButton(btn =>
@@ -628,42 +576,6 @@ export class ImaSettingTab extends PluginSettingTab {
 						}
 					}),
 			);
-
-		// TODO: 后续优化附件路径模式 / TODO: optimize attachment path mode later
-		// ── 附件路径设置 / Attachment path settings ──────────────────────────
-		// let subfolderInput: HTMLInputElement | null = null;
-		//
-		// new Setting(containerEl)
-		// 	.setName('附件保存位置')
-		// 	.setDesc('图片等附件下载后保存的位置')
-		// 	.addDropdown(drop => {
-		// 		drop
-		// 			.addOption('subfolder', '同步目录下子文件夹（可自定义名称）')
-		// 			.addOption('obsidian', '跟随 Obsidian 附件设置')
-		// 			.addOption('samename', '同步目录下与笔记同名的文件夹')
-		// 			.setValue(this.plugin.settings.attachmentPathMode)
-		// 			.onChange(async value => {
-		// 				this.plugin.settings.attachmentPathMode = value as AttachmentPathMode;
-		// 				await this.plugin.saveSettings();
-		// 				if (subfolderInput) {
-		// 					subfolderInput.toggleClass('ima-hidden', value !== 'subfolder');
-		// 				}
-		// 			});
-		// 	})
-		// 	.addText(text => {
-		// 		text
-		// 			.setPlaceholder('attachments')
-		// 			.setValue(this.plugin.settings.attachmentSubfolderName)
-		// 			.onChange(async value => {
-		// 				this.plugin.settings.attachmentSubfolderName = value.trim() || 'attachments';
-		// 				await this.plugin.saveSettings();
-		// 			});
-		// 		subfolderInput = text.inputEl;
-		// 		subfolderInput.addClass('ima-subfolder-input');
-		// 		if (this.plugin.settings.attachmentPathMode !== 'subfolder') {
-		// 			subfolderInput.addClass('ima-hidden');
-		// 		}
-		// 	});
 
 		// ── 图片链接格式 / Image link format ─────────────────────────────────
 

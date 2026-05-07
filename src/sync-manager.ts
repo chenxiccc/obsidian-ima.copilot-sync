@@ -7,7 +7,7 @@ import { ImageHandler } from './image-handler';
 import { JsonToMarkdown } from './json-to-md';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, ensureFolder, guessFileExtension } from './path-utils';
+import { CHROME_UA, sanitizeFilename, sanitizeTitle, ensureFolder, extractExtFromUrl, guessFileExtension } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -103,8 +103,6 @@ export class SyncManager {
 
 	private buildAttachmentOptions(kbName?: string, kbCategory?: string): AttachmentOptions {
 		return {
-			pathMode: this.settings.attachmentPathMode,
-			subfolderName: this.settings.attachmentSubfolderName,
 			linkFormat: this.settings.linkFormat,
 			syncFolder: normalizePath(this.settings.syncFolder),
 			downloadAttachments: this.settings.downloadAttachments,
@@ -153,13 +151,7 @@ export class SyncManager {
 			if (!kbId) {
 				new Notice('IMA Sync: 请在设置中填写知识库 ID');
 			} else {
-				// 获取知识库名称 / Get KB name
-				let kbName = '';
-				try {
-					const bases = await this.client.searchKnowledgeBases();
-					const found = bases.find(b => b.kb_id === kbId);
-					if (found) kbName = found.kb_name;
-				} catch { /* ignore */ }
+				const kbName = this.settings.knowledgeBaseName;
 				const kbOpts = this.buildAttachmentOptions(kbName || undefined, '个人知识库');
 				const kbFolder = normalizePath(`${syncFolder}/个人知识库/${sanitizeFilename(kbName || kbId)}`);
 				await ensureFolder(this.vault, kbFolder);
@@ -643,22 +635,9 @@ export class SyncManager {
 
 	/** 从 URL 推断下载文件名 / Infer download filename from URL */
 	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
-		const ext = this.extractExtFromUrl(url) || guessFileExtension(url);
-		const safeTitle = fallbackTitle
-			? fallbackTitle.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_')
-			: 'file';
+		const ext = extractExtFromUrl(url) || guessFileExtension(url);
+		const safeTitle = sanitizeTitle(fallbackTitle, 'file');
 		return `${safeTitle}-${Date.now()}-1${ext}`;
-	}
-
-	/** 从 URL 路径提取扩展名 / Extract extension from URL path */
-	private extractExtFromUrl(url: string): string {
-		try {
-			const urlObj = new URL(url);
-			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
-			const dotIdx = lastSegment.lastIndexOf('.');
-			if (dotIdx > 0) return lastSegment.slice(dotIdx).toLowerCase();
-		} catch { /* ignore */ }
-		return '';
 	}
 
 	/** 构建占位符内容 / Build placeholder content */

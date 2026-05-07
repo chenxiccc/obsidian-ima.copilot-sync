@@ -1,27 +1,42 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
-import type { AttachmentPathMode, LinkFormat } from './settings';
+import type { LinkFormat } from './settings';
 import {
 	CHROME_UA,
 	sanitizeFilename,
+	sanitizeTitle,
 	resolveAttachmentFolder,
 	calcRelativePath,
 	ensureFolder,
 	exceedsSizeLimit,
 	extractNoteDir,
 	resolveLinkFormat,
+	extractExtFromUrl,
 	guessFileExtension,
 } from './path-utils';
 
 // 匹配 Markdown 图片语法：![alt](https://...) / Match Markdown image syntax
 const IMG_URL_REGEX = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 
+// ─── 图片命名上下文 / Image naming context ───────────────────────────────────
+
+/** 图片命名上下文，避免逐层传递多个参数 / Image naming context to avoid parameter sprawl */
+export interface ImageNamingContext {
+	/** 笔记标题（用于文件名前缀）/ Note title (for filename prefix) */
+	titleBase?: string;
+	/** 自增索引（可变引用）/ Auto-increment index (mutable reference) */
+	imgIndex: { value: number };
+	/** 时间戳 / Timestamp */
+	timestamp: number;
+}
+
+/** 创建默认图片命名上下文 / Create default image naming context */
+export function createNamingContext(titleBase?: string): ImageNamingContext {
+	return { titleBase, imgIndex: { value: 1 }, timestamp: Date.now() };
+}
+
 // ─── 附件处理选项 / Attachment processing options ────────────────────────────
 
 export interface AttachmentOptions {
-	/** 附件路径模式 / Attachment path mode */
-	pathMode: AttachmentPathMode;
-	/** subfolder 模式下的子文件夹名 / Subfolder name for subfolder mode */
-	subfolderName: string;
 	/** 图片链接格式 / Image link format */
 	linkFormat: LinkFormat;
 	/** 同步根目录（用于 subfolder/samename 模式）/ Sync root dir (for subfolder/samename modes) */
@@ -46,7 +61,7 @@ export class ImageHandler {
 	 * Resolve the actual attachment folder path based on mode
 	 */
 	resolveAttachmentFolder(noteFilePath: string, opts: AttachmentOptions): string {
-		return resolveAttachmentFolder(this.vault, noteFilePath, opts);
+		return resolveAttachmentFolder(opts);
 	}
 
 	/**
@@ -73,8 +88,7 @@ export class ImageHandler {
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await ensureFolder(this.vault, attachmentFolder);
 
-		const ts = Date.now();
-		let imgIndex = 1;
+			const naming = createNamingContext(titleBase);
 
 		for (let i = 0; i < matches.length; i++) {
 			const { full, alt, url } = matches[i] ?? { full: '', alt: '', url: '' };
@@ -89,8 +103,8 @@ export class ImageHandler {
 					}
 				}
 
-				const filename = this.urlToFilename(url, titleBase, ts, imgIndex);
-				imgIndex++;
+				const filename = this.urlToFilename(url, naming);
+				naming.imgIndex.value++;
 				const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
 				const exists = await this.vault.adapter.exists(destPath);
@@ -142,16 +156,15 @@ export class ImageHandler {
 	 * 下载单张图片，保存到附件文件夹，返回格式化链接
 	 * Download a single image, save to attachment folder, return formatted link
 	 */
-	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string, imgIndex?: { value: number }, timestamp?: number): Promise<string> {
+	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions, naming?: ImageNamingContext): Promise<string> {
 		if (!opts.downloadAttachments) return `![image](${url})`;
 
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await ensureFolder(this.vault, attachmentFolder);
 
-		const ts = timestamp ?? Date.now();
-		const idx = imgIndex?.value ?? 1;
-		const filename = this.urlToFilename(url, titleBase, ts, idx);
-		if (imgIndex) imgIndex.value++;
+		const ctx = naming ?? createNamingContext();
+		const filename = this.urlToFilename(url, ctx);
+		ctx.imgIndex.value++;
 		const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
 		const exists = await this.vault.adapter.exists(destPath);
@@ -183,23 +196,10 @@ export class ImageHandler {
 	}
 
 	/** 从 URL 生成合法文件名：titleBase-timestamp-N.ext / Generate valid filename from URL: titleBase-timestamp-N.ext */
-	private urlToFilename(url: string, titleBase: string | undefined, timestamp: number, index: number): string {
-		const ext = this.extractExtFromUrl(url) || guessFileExtension(url) || '.png';
-		const safeTitle = titleBase
-			? titleBase.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_')
-			: 'img';
-		return `${safeTitle}-${timestamp}-${index}${ext}`;
-	}
-
-	/** 从 URL 路径提取扩展名 / Extract extension from URL path */
-	private extractExtFromUrl(url: string): string {
-		try {
-			const urlObj = new URL(url);
-			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
-			const dotIdx = lastSegment.lastIndexOf('.');
-			if (dotIdx > 0) return lastSegment.slice(dotIdx).toLowerCase();
-		} catch { /* ignore */ }
-		return '';
+	private urlToFilename(url: string, naming: ImageNamingContext): string {
+		const ext = extractExtFromUrl(url) || guessFileExtension(url) || '.png';
+		const safeTitle = sanitizeTitle(naming.titleBase, 'img');
+		return `${safeTitle}-${naming.timestamp}-${naming.imgIndex.value}${ext}`;
 	}
 
 	/** 下载图片并写入 vault / Download image and write to vault */

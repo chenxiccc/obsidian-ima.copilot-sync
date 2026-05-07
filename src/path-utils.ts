@@ -18,6 +18,13 @@ export function sanitizeFilename(name: string): string {
 		.slice(0, 100);
 }
 
+/** 清理标题为安全文件名片段（空格→连字符，特殊字符→下划线）/ Sanitize title for filename segment (spaces→hyphens, special chars→underscores) */
+export function sanitizeTitle(name: string | undefined, fallback = 'img'): string {
+	return name
+		? name.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_')
+		: fallback;
+}
+
 // ─── 路径工具 / Path utilities ──────────────────────────────────────────────
 
 /** 提取笔记所在目录 / Extract directory of a note path */
@@ -38,7 +45,7 @@ export function extractNoteBasename(noteFilePath: string): string {
  * 解析附件文件夹路径：syncFolder/attachments/{kbCategory}/{kbName}
  * Resolve attachment folder path: syncFolder/attachments/{kbCategory}/{kbName}
  */
-export function resolveAttachmentFolder(_vault: Vault, _noteFilePath: string, opts: AttachmentOptions): string {
+export function resolveAttachmentFolder(opts: AttachmentOptions): string {
 	const base = normalizePath(`${opts.syncFolder}/attachments`);
 	if (opts.kbCategory && opts.kbName) {
 		return normalizePath(`${base}/${sanitizeFilename(opts.kbCategory)}/${sanitizeFilename(opts.kbName)}`);
@@ -111,6 +118,17 @@ export function resolveLinkFormat(vault: Vault, format: LinkFormat): 'wikilink' 
 }
 
 // ─── 扩展名推断 / Extension guessing ─────────────────────────────────────────
+
+/** 从 URL 路径提取扩展名 / Extract extension from URL path */
+export function extractExtFromUrl(url: string): string {
+	try {
+		const urlObj = new URL(url);
+		const lastSegment = urlObj.pathname.split('/').pop() ?? '';
+		const dotIdx = lastSegment.lastIndexOf('.');
+		if (dotIdx > 0) return lastSegment.slice(dotIdx).toLowerCase();
+	} catch { /* ignore */ }
+	return '';
+}
 
 /** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
 export function guessFileExtension(url: string): string {

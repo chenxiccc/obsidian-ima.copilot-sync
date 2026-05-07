@@ -512,32 +512,11 @@ export class ImaPublicClient {
 		folderId = '',
 		folderPath = '',
 	): Promise<Array<PublicKBItem & { folderPath: string }>> {
-		const allItems: Array<PublicKBItem & { folderPath: string }> = [];
-		let cursor = '';
-
-		while (true) {
-			const result = await this.getKnowledgeListPublic(numericKbId, folderId, cursor, 50);
-			for (const item of result.knowledge_list) {
-				// 文件夹类型：递归进入 / Folder type: recurse into
-				if (item.media_type === 99 && item.folder_info) {
-					const subPath = folderPath
-						? `${folderPath}/${item.folder_info.name}`
-						: item.folder_info.name;
-					const subItems = await this.listAllPublicItems(
-						numericKbId,
-						item.folder_info.folder_id,
-						subPath,
-					);
-					allItems.push(...subItems);
-				} else if (item.media_type !== 99) {
-					allItems.push({ ...item, folderPath });
-				}
-			}
-			if (result.is_end) break;
-			cursor = result.next_cursor;
-		}
-
-		return allItems;
+		return this.listAllItemsRecursive(
+			(folderId, cursor) => this.getKnowledgeListPublic(numericKbId, folderId, cursor, 50),
+			folderId,
+			folderPath,
+		);
 	}
 
 	/**
@@ -549,21 +528,33 @@ export class ImaPublicClient {
 		folderId = '',
 		folderPath = '',
 	): Promise<Array<PublicKBItem & { folderPath: string }>> {
+		return this.listAllItemsRecursive(
+			(folderId, cursor) => this.getShareInfo(shareId, folderId, cursor, 50),
+			folderId,
+			folderPath,
+		);
+	}
+
+	/**
+	 * 递归获取所有条目（通用实现）
+	 * Recursively fetch all items (generic implementation)
+	 */
+	private async listAllItemsRecursive(
+		fetchPage: (folderId: string, cursor: string) => Promise<PublicKBListResponse>,
+		folderId: string,
+		folderPath: string,
+	): Promise<Array<PublicKBItem & { folderPath: string }>> {
 		const allItems: Array<PublicKBItem & { folderPath: string }> = [];
 		let cursor = '';
 
 		while (true) {
-			const result = await this.getShareInfo(shareId, folderId, cursor, 50);
+			const result = await fetchPage(folderId, cursor);
 			for (const item of result.knowledge_list) {
 				if (item.media_type === 99 && item.folder_info) {
 					const subPath = folderPath
 						? `${folderPath}/${item.folder_info.name}`
 						: item.folder_info.name;
-					const subItems = await this.listAllSharedItems(
-						shareId,
-						item.folder_info.folder_id,
-						subPath,
-					);
+					const subItems = await this.listAllItemsRecursive(fetchPage, item.folder_info.folder_id, subPath);
 					allItems.push(...subItems);
 				} else if (item.media_type !== 99) {
 					allItems.push({ ...item, folderPath });
