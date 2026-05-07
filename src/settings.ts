@@ -317,8 +317,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					const infoSpan = label.createEl('span', { cls: 'ima-kb-id' });
 					infoSpan.textContent = `  (${base.content_count} 个内容, ${base.member_count} 人订阅)`;
 
-					const toggle = async () => {
-						checkbox.checked = !checkbox.checked;
+					const onToggle = async () => {
 						if (checkbox.checked) {
 							// 添加到公共知识库列表 / Add to public KB list
 							this.plugin.settings.publicKnowledgeBases.push({
@@ -338,8 +337,11 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						renderPublicKbList();
 					};
-					checkbox.addEventListener('change', toggle);
-					label.addEventListener('click', toggle);
+					checkbox.addEventListener('change', onToggle);
+					label.addEventListener('click', () => {
+						checkbox.checked = !checkbox.checked;
+						onToggle();
+					});
 				}
 			}
 		};
