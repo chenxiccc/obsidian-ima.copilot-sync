@@ -101,7 +101,7 @@ export class SyncManager {
 		await this.vault.adapter.rename(old, neu);
 	}
 
-	private buildAttachmentOptions(kbName?: string): AttachmentOptions {
+	private buildAttachmentOptions(kbName?: string, kbCategory?: string): AttachmentOptions {
 		return {
 			pathMode: this.settings.attachmentPathMode,
 			subfolderName: this.settings.attachmentSubfolderName,
@@ -110,6 +110,7 @@ export class SyncManager {
 			downloadAttachments: this.settings.downloadAttachments,
 			attachmentSizeLimitBytes: this.calcSizeLimitBytes(),
 			kbName,
+			kbCategory,
 		};
 	}
 
@@ -152,8 +153,15 @@ export class SyncManager {
 			if (!kbId) {
 				new Notice('IMA Sync: 请在设置中填写知识库 ID');
 			} else {
-				const kbOpts = this.buildAttachmentOptions('个人知识库');
-				const kbFolder = normalizePath(`${syncFolder}/知识库`);
+				// 获取知识库名称 / Get KB name
+				let kbName = '';
+				try {
+					const bases = await this.client.searchKnowledgeBases();
+					const found = bases.find(b => b.kb_id === kbId);
+					if (found) kbName = found.kb_name;
+				} catch { /* ignore */ }
+				const kbOpts = this.buildAttachmentOptions(kbName || undefined, '个人知识库');
+				const kbFolder = normalizePath(`${syncFolder}/个人知识库/${sanitizeFilename(kbName || kbId)}`);
 				await ensureFolder(this.vault, kbFolder);
 
 				const existingMap = this.scanExistingKbFiles(kbFolder);
@@ -194,7 +202,7 @@ export class SyncManager {
 		if (this.settings.publicKnowledgeBases.length > 0) {
 			for (const pubKB of this.settings.publicKnowledgeBases) {
 				try {
-					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions(pubKB.name || undefined));
+					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions(pubKB.name || undefined, pubKB.kbCategory || '订阅和公共知识库'));
 					syncedCount += count;
 				} catch (err) {
 					console.warn(`IMA Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
@@ -221,7 +229,8 @@ export class SyncManager {
 		opts: AttachmentOptions,
 	): Promise<number> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
-		const kbFolder = normalizePath(`${syncFolder}/知识库/${sanitizeFilename(pubKB.name || pubKB.shareId || pubKB.numericKbId)}`);
+		const kbCategory = pubKB.kbCategory || '订阅和公共知识库';
+			const kbFolder = normalizePath(`${syncFolder}/${sanitizeFilename(kbCategory)}/${sanitizeFilename(pubKB.name || pubKB.shareId || pubKB.numericKbId)}`);
 		await ensureFolder(this.vault, kbFolder);
 
 		// 获取数字 KB ID（若尚未获取）/ Resolve numeric KB ID if not yet available

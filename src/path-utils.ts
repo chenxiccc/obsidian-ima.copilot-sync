@@ -35,11 +35,14 @@ export function extractNoteBasename(noteFilePath: string): string {
 }
 
 /**
- * 解析附件文件夹路径：统一为 syncFolder/attachments/[kbName]
- * Resolve attachment folder path: unified as syncFolder/attachments/[kbName]
+ * 解析附件文件夹路径：syncFolder/attachments/{kbCategory}/{kbName}
+ * Resolve attachment folder path: syncFolder/attachments/{kbCategory}/{kbName}
  */
 export function resolveAttachmentFolder(_vault: Vault, _noteFilePath: string, opts: AttachmentOptions): string {
 	const base = normalizePath(`${opts.syncFolder}/attachments`);
+	if (opts.kbCategory && opts.kbName) {
+		return normalizePath(`${base}/${sanitizeFilename(opts.kbCategory)}/${sanitizeFilename(opts.kbName)}`);
+	}
 	if (opts.kbName) {
 		return normalizePath(`${base}/${sanitizeFilename(opts.kbName)}`);
 	}

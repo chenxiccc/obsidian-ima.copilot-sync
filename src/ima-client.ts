@@ -417,6 +417,8 @@ export interface PublicKnowledgeBase {
 	name: string;
 	/** 上次同步时间戳（毫秒），0 = 从未同步 / Last sync timestamp (ms), 0 = never */
 	lastSyncTime: number;
+	/** 知识库分类（共享知识库/订阅和公共知识库）/ KB category */
+	kbCategory?: string;
 }
 
 export class ImaPublicClient {

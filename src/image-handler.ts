@@ -32,6 +32,8 @@ export interface AttachmentOptions {
 	attachmentSizeLimitBytes: number;
 	/** 知识库名称（用于附件子目录）/ KB name (for attachment subdirectory) */
 	kbName?: string;
+	/** 知识库分类（个人知识库/共享知识库/订阅和公共知识库）/ KB category */
+	kbCategory?: string;
 }
 
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────

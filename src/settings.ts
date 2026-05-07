@@ -350,6 +350,50 @@ export class ImaSettingTab extends PluginSettingTab {
 					});
 				}
 			}
+
+			if (subscribed.length > 0) {
+				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
+				header.textContent = '订阅知识库';
+				for (const base of subscribed) {
+					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
+					const checkbox = row.createEl('input') as HTMLInputElement;
+					checkbox.type = 'checkbox';
+					checkbox.className = 'ima-kb-checkbox';
+					checkbox.checked = this.plugin.settings.publicKnowledgeBases.some(
+						p => p.encryptedKbId === base.kb_id,
+					);
+
+					const label = row.createEl('label');
+					label.textContent = `${base.kb_name}`;
+					const infoSpan = label.createEl('span', { cls: 'ima-kb-id' });
+					infoSpan.textContent = `  (${base.content_count} 个内容, ${base.member_count} 人订阅)`;
+
+					const onToggle = async () => {
+						if (checkbox.checked) {
+							this.plugin.settings.publicKnowledgeBases.push({
+								encryptedKbId: base.kb_id,
+								numericKbId: '',
+								shareId: '',
+								name: base.kb_name,
+								lastSyncTime: 0,
+								kbCategory: '订阅和公共知识库',
+							});
+						} else {
+							this.plugin.settings.publicKnowledgeBases =
+								this.plugin.settings.publicKnowledgeBases.filter(
+									p => p.encryptedKbId !== base.kb_id,
+								);
+						}
+						await this.plugin.saveSettings();
+						renderPublicKbList();
+					};
+					checkbox.addEventListener('change', onToggle);
+					label.addEventListener('click', () => {
+						checkbox.checked = !checkbox.checked;
+						onToggle();
+					});
+				}
+			}
 		};
 
 		kbSelectedSetting.addButton(btn =>
@@ -425,6 +469,7 @@ export class ImaSettingTab extends PluginSettingTab {
 								shareId,
 								name: kbInfo.name,
 								lastSyncTime: 0,
+								kbCategory: '订阅和公共知识库',
 							});
 							await this.plugin.saveSettings();
 							input.value = '';
