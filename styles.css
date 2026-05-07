@@ -22,6 +22,22 @@
 	width: 400px;
 }
 
+/* 知识库分组框背景和布局
+   KB group box background and layout */
+.ima-kb-box {
+	background: var(--background-secondary);
+	border-radius: 8px;
+	padding: 4px 0;
+	margin-bottom: 16px;
+}
+
+/* 知识库分组框：消除内部 setting-item 的分割线
+   KB group box: remove dividers from inner setting-items */
+.ima-kb-box .setting-item {
+	border-top: none !important;
+	border-bottom: none !important;
+}
+
 /* 知识库列表容器 / Knowledge base list container */
 .ima-kb-list {
 	margin-bottom: 12px;

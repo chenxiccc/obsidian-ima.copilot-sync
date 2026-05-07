@@ -60,7 +60,7 @@ export class SyncManager {
 
 		// 检查是否有任何同步任务可执行 / Check if any sync task is available
 		const hasPrivateWork = this.settings.syncNotes || this.settings.syncKnowledgeBase;
-		const hasPublicWork = this.settings.syncPublicKnowledgeBases && this.settings.publicKnowledgeBases.length > 0;
+		const hasPublicWork = this.settings.publicKnowledgeBases.length > 0;
 		if (hasPrivateWork && !hasCredentials) {
 			new Notice('IMA Sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
 			return;
@@ -189,7 +189,7 @@ export class SyncManager {
 		}
 
 		// ── 同步公共/订阅知识库 / Sync public/subscribed knowledge bases ──
-		if (this.settings.syncPublicKnowledgeBases) {
+		if (this.settings.publicKnowledgeBases.length > 0) {
 			for (const pubKB of this.settings.publicKnowledgeBases) {
 				try {
 					const count = await this.syncPublicKnowledgeBase(pubKB, opts);

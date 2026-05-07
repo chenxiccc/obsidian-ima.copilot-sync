@@ -64,8 +64,6 @@ export interface ImaPluginSettings {
 	attachmentSizeLimit: number;
 	/** 附件大小限制单位 / Attachment size limit unit */
 	attachmentSizeLimitUnit: AttachmentSizeUnit;
-	/** 是否同步公共/订阅知识库 / Whether to sync public/subscribed KBs */
-	syncPublicKnowledgeBases: boolean;
 	/** 公共/订阅知识库列表 / Public/subscribed KB list */
 	publicKnowledgeBases: PublicKnowledgeBase[];
 }
@@ -85,7 +83,6 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	downloadAttachments: false,
 	attachmentSizeLimit: 0,
 	attachmentSizeLimitUnit: 'MB',
-	syncPublicKnowledgeBases: false,
 	publicKnowledgeBases: [],
 };
 
@@ -248,13 +245,22 @@ export class ImaSettingTab extends PluginSettingTab {
 					.onChange(async value => {
 						this.plugin.settings.syncKnowledgeBase = value;
 						await this.plugin.saveSettings();
+						kbBox.toggleClass('ima-hidden', !value);
 					}),
 			);
 
+		// ── 知识库分组框（受开关控制显隐）/ KB group box (visibility controlled by toggle) ──
+
+		const kbBox = containerEl.createDiv({ cls: 'ima-kb-box' });
+
+		if (!this.plugin.settings.syncKnowledgeBase) {
+			kbBox.addClass('ima-hidden');
+		}
+
 		// ── 知识库选择（个人 + 订阅）/ KB selection (personal + subscribed) ──
 
-		const kbSelectedSetting = new Setting(containerEl)
-			.setName('选择要同步的知识库')
+		const kbSelectedSetting = new Setting(kbBox)
+			.setName('选择要同步的个人和订阅知识库')
 			.setDesc(
 				this.plugin.settings.knowledgeBaseId
 					? `当前已选：${this.plugin.settings.knowledgeBaseId}`
@@ -262,7 +268,7 @@ export class ImaSettingTab extends PluginSettingTab {
 			);
 
 		// 知识库列表容器（默认隐藏）/ KB list container (hidden by default)
-		const kbListContainer = containerEl.createDiv({ cls: 'ima-kb-list ima-hidden' });
+		const kbListContainer = kbBox.createDiv({ cls: 'ima-kb-list ima-hidden' });
 
 		/** 渲染知识库选项列表（分组：个人 + 订阅）/ Render KB list (grouped: personal + subscribed) */
 		const renderKbList = (bases: SearchedKnowledgeBase[]) => {
@@ -382,22 +388,9 @@ export class ImaSettingTab extends PluginSettingTab {
 				}),
 		);
 
-		// ── 公共知识库同步开关 + 手动添加 / Public KB toggle + manual add ──
+		// ── 手动添加公共知识库（在 kbBox 内）/ Manually add public KB (inside kbBox) ──
 
-		new Setting(containerEl)
-			.setName('同步公共知识库')
-			.setDesc('同步通过分享链接添加的公共知识库（无需认证）')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.syncPublicKnowledgeBases)
-					.onChange(async value => {
-						this.plugin.settings.syncPublicKnowledgeBases = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		// 手动添加公共知识库 / Manually add public KB
-		new Setting(containerEl)
+		new Setting(kbBox)
 			.setName('添加公共知识库')
 			.setDesc('粘贴分享链接或 shareId，如 https://ima.qq.com/wiki/?shareId=xxx')
 			.addText(text => {
@@ -446,8 +439,8 @@ export class ImaSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		// 已添加的公共知识库列表 / Added public KB list
-		const publicKbListContainer = containerEl.createDiv({ cls: 'ima-pubkb-list' });
+		// 已添加的公共知识库列表（在 kbBox 内）/ Added public KB list (inside kbBox)
+		const publicKbListContainer = kbBox.createDiv({ cls: 'ima-pubkb-list' });
 
 		/** 渲染已添加的公共知识库列表 / Render added public KB list */
 		const renderPublicKbList = () => {
@@ -480,6 +473,72 @@ export class ImaSettingTab extends PluginSettingTab {
 			}
 		};
 		renderPublicKbList();
+
+		// ── 知识库删除同步 / KB delete sync ────────────────────────────────
+
+		new Setting(containerEl)
+			.setName('知识库删除同步')
+			.setDesc('IMA 知识库中删除条目后，本地文件的处理方式')
+			.addDropdown(drop => {
+				drop
+					.addOption('delete', '删除本地文件')
+					.addOption('keep', '保留本地文件')
+					.addOption('mark-deleted', '标记 [deleted]（保留文件，标题加后缀）')
+					.setValue(this.plugin.settings.syncDeleteMode)
+					.onChange(async value => {
+						this.plugin.settings.syncDeleteMode = value as SyncDeleteMode;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// ── 附件下载设置 / Attachment download settings ──────────────────────
+
+		let sizeLimitContainer: HTMLDivElement | null = null;
+
+		new Setting(containerEl)
+			.setName('下载附件')
+			.setDesc('将图片、PDF 等附件下载到本地（关闭则保留原始链接）')
+			.addToggle(toggle =>
+				toggle
+					.setValue(this.plugin.settings.downloadAttachments)
+					.onChange(async value => {
+						this.plugin.settings.downloadAttachments = value;
+						await this.plugin.saveSettings();
+						if (sizeLimitContainer) {
+							sizeLimitContainer.toggleClass('ima-hidden', !value);
+						}
+					}),
+			);
+
+		sizeLimitContainer = containerEl.createDiv();
+		if (!this.plugin.settings.downloadAttachments) {
+			sizeLimitContainer.addClass('ima-hidden');
+		}
+
+		new Setting(sizeLimitContainer)
+			.setName('附件大小限制')
+			.setDesc('超过限制的附件保留原始链接，不下载（0 = 不限制）')
+			.addText(text =>
+				text
+					.setPlaceholder('0')
+					.setValue(String(this.plugin.settings.attachmentSizeLimit))
+					.onChange(async value => {
+						const num = parseFloat(value);
+						this.plugin.settings.attachmentSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
+						await this.plugin.saveSettings();
+					}),
+			)
+			.addDropdown(drop =>
+				drop
+					.addOption('KB', 'KB')
+					.addOption('MB', 'MB')
+					.addOption('GB', 'GB')
+					.setValue(this.plugin.settings.attachmentSizeLimitUnit)
+					.onChange(async value => {
+						this.plugin.settings.attachmentSizeLimitUnit = value as AttachmentSizeUnit;
+						await this.plugin.saveSettings();
+					}),
+			);
 
 		// ── 同步设置 / Sync settings ─────────────────────────────────────────
 
@@ -577,72 +636,6 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
-
-		// ── 知识库删除同步 / KB delete sync ────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('知识库删除同步')
-			.setDesc('IMA 知识库中删除条目后，本地文件的处理方式')
-			.addDropdown(drop => {
-				drop
-					.addOption('delete', '删除本地文件')
-					.addOption('keep', '保留本地文件')
-					.addOption('mark-deleted', '标记 [deleted]（保留文件，标题加后缀）')
-					.setValue(this.plugin.settings.syncDeleteMode)
-					.onChange(async value => {
-						this.plugin.settings.syncDeleteMode = value as SyncDeleteMode;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		// ── 附件下载设置 / Attachment download settings ──────────────────────
-
-		let sizeLimitContainer: HTMLDivElement | null = null;
-
-		new Setting(containerEl)
-			.setName('下载附件')
-			.setDesc('将图片、PDF 等附件下载到本地（关闭则保留原始链接）')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.downloadAttachments)
-					.onChange(async value => {
-						this.plugin.settings.downloadAttachments = value;
-						await this.plugin.saveSettings();
-						if (sizeLimitContainer) {
-							sizeLimitContainer.toggleClass('ima-hidden', !value);
-						}
-					}),
-			);
-
-		sizeLimitContainer = containerEl.createDiv();
-		if (!this.plugin.settings.downloadAttachments) {
-			sizeLimitContainer.addClass('ima-hidden');
-		}
-
-		new Setting(sizeLimitContainer)
-			.setName('附件大小限制')
-			.setDesc('超过限制的附件保留原始链接，不下载（0 = 不限制）')
-			.addText(text =>
-				text
-					.setPlaceholder('0')
-					.setValue(String(this.plugin.settings.attachmentSizeLimit))
-					.onChange(async value => {
-						const num = parseFloat(value);
-						this.plugin.settings.attachmentSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
-						await this.plugin.saveSettings();
-					}),
-			)
-			.addDropdown(drop =>
-				drop
-					.addOption('KB', 'KB')
-					.addOption('MB', 'MB')
-					.addOption('GB', 'GB')
-					.setValue(this.plugin.settings.attachmentSizeLimitUnit)
-					.onChange(async value => {
-						this.plugin.settings.attachmentSizeLimitUnit = value as AttachmentSizeUnit;
-						await this.plugin.saveSettings();
-					}),
-			);
 
 		// ── 手动同步 / Manual sync ──────────────────────────────────────────
 
