@@ -132,4 +132,12 @@ export default class ImaPlugin extends Plugin {
 	async migrateSyncFolder(oldFolder: string, newFolder: string): Promise<void> {
 		await this.syncManager.migrateSyncFolder(oldFolder, newFolder);
 	}
+
+	/**
+	 * 将指定知识库文件夹下的所有文件移入回收站，供设置界面调用
+	 * Move all files under the specified KB folder to trash, called from settings tab
+	 */
+	async deleteKbFolder(...folderPaths: string[]): Promise<void> {
+		await this.syncManager.deleteKbFolder(...folderPaths);
+	}
 }

@@ -80,6 +80,18 @@
 	border-top: 1px solid var(--background-modifier-border);
 }
 
+/* 知识库分组说明文字 / KB group note text */
+.ima-kb-group-note {
+	font-size: 0.82em;
+	color: var(--text-muted);
+	margin: 0 0 4px 0;
+}
+
+/* 知识库限制警告文字 / KB limitation warning text */
+.ima-kb-group-note--warning {
+	color: var(--text-warning, #e8a000);
+}
+
 /* 订阅知识库 checkbox / Subscribed KB checkbox */
 .ima-kb-checkbox {
 	margin-right: 4px;

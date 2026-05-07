@@ -778,6 +778,51 @@ export class SyncManager {
 	}
 
 	/**
+	 * 将指定的多个文件夹下的所有已同步文件移入系统回收站
+	 * Move all synced files under the specified folders to system trash
+	 */
+	async deleteKbFolder(...folderPaths: string[]): Promise<void> {
+		for (const folderPath of folderPaths) {
+			await this.trashFolder(folderPath);
+		}
+	}
+
+	/** 递归将一个文件夹下所有文件移入回收站 / Recursively trash all files under a folder */
+	private async trashFolder(folderPath: string): Promise<void> {
+		const exists = await this.vault.adapter.exists(folderPath);
+		if (!exists) return;
+
+		const listing = await this.vault.adapter.list(folderPath);
+		const allFiles: string[] = [...listing.files];
+
+		// 递归收集子文件夹中的文件 / Recursively collect files in subfolders
+		const queue = [...listing.folders];
+		while (queue.length > 0) {
+			const folder = queue.pop()!;
+			try {
+				const sub = await this.vault.adapter.list(folder);
+				allFiles.push(...sub.files);
+				queue.push(...sub.folders);
+			} catch {
+				// 忽略无法读取的子目录 / Ignore unreadable subdirectories
+			}
+		}
+
+		for (const filePath of allFiles) {
+			try {
+				const file = this.vault.getFileByPath(filePath);
+				if (file instanceof TFile) {
+					await this.vault.trash(file, true);
+				} else {
+					await this.vault.adapter.remove(filePath);
+				}
+			} catch (err) {
+				console.warn(`IMA Sync: 移入回收站失败 / Failed to trash: ${filePath}`, err);
+			}
+		}
+	}
+
+	/**
 	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
 	 * Check image paths and delete files no longer referenced by any synced note
 	 *

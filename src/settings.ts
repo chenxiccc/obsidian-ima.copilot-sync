@@ -1,7 +1,8 @@
-import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, Modal, normalizePath, PluginSettingTab, Setting, Notice } from 'obsidian';
 import type ImaPlugin from './main';
 import { ImaClient, ImaPublicClient } from './ima-client';
 import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
+import { sanitizeFilename } from './path-utils';
 
 // ─── 设置数据结构 / Settings data structure ────────────────────────────────
 
@@ -84,6 +85,53 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	publicKnowledgeBases: [],
 	forceReadingMode: true,
 };
+
+// ─── 确认对话框（取消/删除知识库时询问是否清理本地文件）/ Confirm modal for KB removal ──
+
+class ConfirmModal extends Modal {
+	private confirmed = false;
+
+	constructor(
+		app: App,
+		private readonly title: string,
+		private readonly message: string,
+		private readonly confirmLabel: string,
+		private readonly cancelLabel: string,
+		private readonly onConfirm: () => void,
+		private readonly onCancel: () => void,
+	) {
+		super(app);
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl('h3', { text: this.title });
+		contentEl.createEl('p', { text: this.message });
+
+		const btnRow = contentEl.createDiv({ cls: 'modal-button-container' });
+
+		const confirmBtn = btnRow.createEl('button', { cls: 'mod-warning', text: this.confirmLabel });
+		confirmBtn.addEventListener('click', () => {
+			this.confirmed = true;
+			this.close();
+		});
+
+		const cancelBtn = btnRow.createEl('button', { text: this.cancelLabel });
+		cancelBtn.addEventListener('click', () => {
+			this.close();
+		});
+	}
+
+	onClose(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		if (this.confirmed) {
+			this.onConfirm();
+		} else {
+			this.onCancel();
+		}
+	}
+}
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
 
@@ -289,6 +337,8 @@ export class ImaSettingTab extends PluginSettingTab {
 			if (personal.length > 0) {
 				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
 				header.textContent = '个人知识库 / 共享知识库';
+				const note = kbListContainer.createDiv({ cls: 'ima-kb-group-note' });
+				note.textContent = '支持完整同步笔记、网页、微信文章和文件';
 				for (const base of personal) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
 					const checkbox = row.createEl('input') as HTMLInputElement;
@@ -303,20 +353,41 @@ export class ImaSettingTab extends PluginSettingTab {
 					const idSpan = label.createEl('span', { cls: 'ima-kb-id' });
 					idSpan.textContent = `  (${base.content_count} 个内容)`;
 
+					const removePersonal = async (deleteFiles: boolean) => {
+						if (deleteFiles) {
+							const syncFolder = this.plugin.settings.syncFolder;
+							const safeName = sanitizeFilename(base.kb_name);
+							const kbFolder = normalizePath(`${syncFolder}/个人知识库/${safeName}`);
+							const attachFolder = normalizePath(`${syncFolder}/attachments/个人知识库/${safeName}`);
+							await this.plugin.deleteKbFolder(kbFolder, attachFolder);
+						}
+						this.plugin.settings.personalKnowledgeBases =
+							this.plugin.settings.personalKnowledgeBases.filter(
+								p => p.kbId !== base.kb_id,
+							);
+						await this.plugin.saveSettings();
+						updateKbDesc();
+					};
+
 					const onToggle = async () => {
 						if (checkbox.checked) {
 							this.plugin.settings.personalKnowledgeBases.push({
 								kbId: base.kb_id,
 								name: base.kb_name,
 							});
+							await this.plugin.saveSettings();
+							updateKbDesc();
 						} else {
-							this.plugin.settings.personalKnowledgeBases =
-								this.plugin.settings.personalKnowledgeBases.filter(
-									p => p.kbId !== base.kb_id,
-								);
+							new ConfirmModal(
+								this.app,
+								'删除本地已同步文件？',
+								`取消同步「${base.kb_name}」后，本地已同步的文件是否一并移入回收站？`,
+								'移入回收站',
+								'保留本地文件',
+								() => void removePersonal(true),
+								() => void removePersonal(false),
+							).open();
 						}
-						await this.plugin.saveSettings();
-						updateKbDesc();
 					};
 					checkbox.addEventListener('change', onToggle);
 					label.addEventListener('click', () => {
@@ -329,6 +400,8 @@ export class ImaSettingTab extends PluginSettingTab {
 			if (subscribed.length > 0) {
 				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
 				header.textContent = '我加入的订阅知识库';
+				const warning = kbListContainer.createDiv({ cls: 'ima-kb-group-note ima-kb-group-note--warning' });
+				warning.textContent = '⚠ 笔记仅同步约 300 字预览；文件仅同步 AI 摘要，无法下载原件';
 				for (const base of subscribed) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
 					const checkbox = row.createEl('input') as HTMLInputElement;
@@ -342,6 +415,23 @@ export class ImaSettingTab extends PluginSettingTab {
 					label.textContent = `${base.kb_name}`;
 					const infoSpan = label.createEl('span', { cls: 'ima-kb-id' });
 					infoSpan.textContent = `  (${base.content_count} 个内容, ${base.member_count} 人订阅)`;
+
+					const removeSubscribed = async (deleteFiles: boolean) => {
+						if (deleteFiles) {
+							const syncFolder = this.plugin.settings.syncFolder;
+							const safeName = sanitizeFilename(base.kb_name);
+							const kbFolder = normalizePath(`${syncFolder}/订阅和公共知识库/${safeName}`);
+							const attachFolder = normalizePath(`${syncFolder}/attachments/订阅和公共知识库/${safeName}`);
+							await this.plugin.deleteKbFolder(kbFolder, attachFolder);
+						}
+						this.plugin.settings.publicKnowledgeBases =
+							this.plugin.settings.publicKnowledgeBases.filter(
+								p => p.encryptedKbId !== base.kb_id,
+							);
+						await this.plugin.saveSettings();
+						updateKbDesc();
+						renderPublicKbList();
+					};
 
 					const onToggle = async () => {
 						if (checkbox.checked) {
@@ -361,15 +451,20 @@ export class ImaSettingTab extends PluginSettingTab {
 								lastSyncTime: 0,
 								kbCategory: '订阅和公共知识库',
 							});
+							await this.plugin.saveSettings();
+							updateKbDesc();
+							renderPublicKbList();
 						} else {
-							this.plugin.settings.publicKnowledgeBases =
-								this.plugin.settings.publicKnowledgeBases.filter(
-									p => p.encryptedKbId !== base.kb_id,
-								);
+							new ConfirmModal(
+								this.app,
+								'删除本地已同步文件？',
+								`取消同步「${base.kb_name}」后，本地已同步的文件是否一并移入回收站？`,
+								'移入回收站',
+								'保留本地文件',
+								() => void removeSubscribed(true),
+								() => void removeSubscribed(false),
+							).open();
 						}
-						await this.plugin.saveSettings();
-						updateKbDesc();
-						renderPublicKbList();
 					};
 					checkbox.addEventListener('change', onToggle);
 					label.addEventListener('click', () => {
@@ -423,7 +518,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(kbBox)
 			.setName('添加公共知识库')
-			.setDesc('粘贴分享链接或 shareId，如 https://ima.qq.com/wiki/?shareId=xxx')
+			.setDesc('粘贴分享链接或 shareId，如 https://ima.qq.com/wiki/?shareId=xxx（⚠ 笔记仅同步约 300 字预览；文件仅同步 AI 摘要）')
 			.addText(text => {
 				text.setPlaceholder('粘贴分享链接或 shareId');
 				text.inputEl.addClass('ima-input-wide');
@@ -494,13 +589,32 @@ export class ImaSettingTab extends PluginSettingTab {
 
 				const delBtn = row.createEl('button', { cls: 'ima-pubkb-del' });
 				delBtn.textContent = '删除';
-				delBtn.addEventListener('click', async () => {
-					this.plugin.settings.publicKnowledgeBases =
-						this.plugin.settings.publicKnowledgeBases.filter(
-							p => p !== base,
-						);
-					await this.plugin.saveSettings();
-					renderPublicKbList();
+				delBtn.addEventListener('click', () => {
+					const removePublic = async (deleteFiles: boolean) => {
+						if (deleteFiles) {
+							const syncFolder = this.plugin.settings.syncFolder;
+							const category = sanitizeFilename(base.kbCategory ?? '订阅和公共知识库');
+							const safeName = sanitizeFilename(base.name);
+							const kbFolder = normalizePath(`${syncFolder}/${category}/${safeName}`);
+							const attachFolder = normalizePath(`${syncFolder}/attachments/${category}/${safeName}`);
+							await this.plugin.deleteKbFolder(kbFolder, attachFolder);
+						}
+						this.plugin.settings.publicKnowledgeBases =
+							this.plugin.settings.publicKnowledgeBases.filter(
+								p => p !== base,
+							);
+						await this.plugin.saveSettings();
+						renderPublicKbList();
+					};
+					new ConfirmModal(
+						this.app,
+						'删除本地已同步文件？',
+						`删除「${base.name}」后，本地已同步的文件是否一并移入回收站？`,
+						'移入回收站',
+						'保留本地文件',
+						() => void removePublic(true),
+						() => void removePublic(false),
+					).open();
 				});
 			}
 		};
