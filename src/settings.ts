@@ -58,6 +58,8 @@ export interface ImaPluginSettings {
 	attachmentSizeLimitUnit: AttachmentSizeUnit;
 	/** 公共/订阅知识库列表 / Public/subscribed KB list */
 	publicKnowledgeBases: PublicKnowledgeBase[];
+	/** IMA 文件强制阅读模式 / Force reading mode for IMA files */
+	forceReadingMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
@@ -75,6 +77,7 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	attachmentSizeLimit: 0,
 	attachmentSizeLimitUnit: 'MB',
 	publicKnowledgeBases: [],
+	forceReadingMode: true,
 };
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
@@ -593,6 +596,20 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		// ── 强制阅读模式 / Force reading mode ───────────────────────────────
+
+		new Setting(containerEl)
+			.setName('强制阅读模式')
+			.setDesc('IMA 同步文件默认以阅读模式打开，防止误编辑被同步覆盖')
+			.addToggle(toggle =>
+				toggle
+					.setValue(this.plugin.settings.forceReadingMode)
+					.onChange(async value => {
+						this.plugin.settings.forceReadingMode = value;
+						await this.plugin.saveSettings();
+					}),
+			);
 
 		// ── 手动同步 / Manual sync ──────────────────────────────────────────
 

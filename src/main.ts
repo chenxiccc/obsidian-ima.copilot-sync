@@ -1,4 +1,4 @@
-import { Plugin, Notice } from 'obsidian';
+import { Plugin, Notice, MarkdownView, normalizePath } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
@@ -42,6 +42,23 @@ export default class ImaPlugin extends Plugin {
 
 		// ── 设置界面 / Settings tab ──────────────────────────────────────────
 		this.addSettingTab(new ImaSettingTab(this.app, this));
+
+		// ── IMA 文件强制阅读模式 / Force reading mode for IMA files ────────
+		this.registerEvent(
+			this.app.workspace.on('active-leaf-change', (leaf) => {
+				if (!this.settings.forceReadingMode) return;
+				if (!leaf?.view || !(leaf.view instanceof MarkdownView)) return;
+				const file = leaf.view.file;
+				if (!file) return;
+				const syncFolder = normalizePath(this.settings.syncFolder);
+				if (!file.path.startsWith(syncFolder + '/')) return;
+
+				const state = leaf.getViewState();
+				if (state.state?.mode === 'preview') return;
+				state.state = { ...state.state, mode: 'preview', source: false };
+				void leaf.setViewState(state);
+			}),
+		);
 
 		// ── 启动时同步（等待 workspace 准备完毕后延迟 2 秒，避免阻塞启动）
 		// ── Sync on startup (delay 2s after workspace ready to avoid blocking startup)
