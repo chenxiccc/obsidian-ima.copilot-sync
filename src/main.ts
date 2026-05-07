@@ -50,13 +50,22 @@ export default class ImaPlugin extends Plugin {
 				if (!leaf?.view || !(leaf.view instanceof MarkdownView)) return;
 				const file = leaf.view.file;
 				if (!file) return;
-				const syncFolder = normalizePath(this.settings.syncFolder);
-				if (!file.path.startsWith(syncFolder + '/')) return;
 
+				const syncFolder = normalizePath(this.settings.syncFolder);
+				const isImaFile = file.path.startsWith(syncFolder + '/');
 				const state = leaf.getViewState();
-				if (state.state?.mode === 'preview') return;
-				state.state = { ...state.state, mode: 'preview', source: false };
-				void leaf.setViewState(state);
+
+				if (isImaFile) {
+					// IMA 文件：强制阅读模式 / IMA file: force reading mode
+					if (state.state?.mode === 'preview') return;
+					state.state = { ...state.state, mode: 'preview', source: false };
+					void leaf.setViewState(state);
+				} else if (state.state?.mode === 'preview' && state.state?.source === false) {
+					// 非 IMA 文件：恢复编辑模式（仅当之前被强制切到阅读模式时）
+					// Non-IMA file: restore editing mode (only if we forced preview earlier)
+					state.state = { ...state.state, mode: 'source', source: false };
+					void leaf.setViewState(state);
+				}
 			}),
 		);
 
