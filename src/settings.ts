@@ -277,17 +277,18 @@ export class ImaSettingTab extends PluginSettingTab {
 		};
 
 		/** 渲染知识库选项列表（分组：个人 + 订阅）/ Render KB list (grouped: personal + subscribed) */
-		const renderKbList = (bases: SearchedKnowledgeBase[]) => {
+		const renderKbList = (bases: SearchedKnowledgeBase[], client: ImaClient) => {
 			kbListContainer.empty();
 			kbListContainer.removeClass('ima-hidden');
 
-			// 按类型分组：个人在前，订阅在后 / Group by type: personal first, subscribed after
-			const personal = bases.filter(b => b.base_type === '个人知识库');
-			const subscribed = bases.filter(b => b.base_type !== '个人知识库');
+			// 按类型分组：个人/共享在前（走 openapi），订阅在后（走 cgi-bin）
+			// Group by type: personal/shared first (openapi), subscribed last (cgi-bin)
+			const personal = bases.filter(b => b.base_type === '个人知识库' || b.base_type === '共享知识库');
+			const subscribed = bases.filter(b => b.base_type === '我加入的订阅知识库');
 
 			if (personal.length > 0) {
 				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
-				header.textContent = '个人知识库';
+				header.textContent = '个人知识库 / 共享知识库';
 				for (const base of personal) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
 					const checkbox = row.createEl('input') as HTMLInputElement;
@@ -344,9 +345,17 @@ export class ImaSettingTab extends PluginSettingTab {
 
 					const onToggle = async () => {
 						if (checkbox.checked) {
+							// 尝试通过私有 API 获取根文件夹 ID（用于 cgi-bin 接口）
+							// Try to get root folder_id via private API (for cgi-bin)
+							let numericKbId = '';
+							try {
+								numericKbId = await client.getKbFolderId(base.kb_id);
+							} catch {
+								// 获取失败时保持为空，同步时会再次尝试 / Keep empty on failure, retry on sync
+							}
 							this.plugin.settings.publicKnowledgeBases.push({
 								encryptedKbId: base.kb_id,
-								numericKbId: '',
+								numericKbId,
 								shareId: '',
 								name: base.kb_name,
 								lastSyncTime: 0,
@@ -398,7 +407,7 @@ export class ImaSettingTab extends PluginSettingTab {
 							new Notice('未找到任何知识库');
 							btn.setButtonText('查看并选择知识库');
 						} else {
-							renderKbList(bases);
+							renderKbList(bases, client);
 							btn.setButtonText('收起列表');
 						}
 					} catch (err) {

@@ -334,6 +334,32 @@ export class ImaClient {
 			notebook_ext_info: data.notebook_ext_info,
 		};
 	}
+
+	/**
+	 * 通过加密 kb_id 获取知识库信息（含数字 KB ID）
+	 * Get KB info by encrypted kb_id (includes numeric KB ID)
+	 */
+	async getKnowledgeBaseInfo(encryptedKbId: string): Promise<{ id: string; name: string }> {
+		const data = await this.post<{ infos: Record<string, { id: string; name: string }> }>(
+			'openapi/wiki/v1/get_knowledge_base',
+			{ ids: [encryptedKbId] },
+		);
+		const info = data.infos?.[encryptedKbId];
+		if (!info?.id) throw new Error(`知识库信息获取失败：${encryptedKbId}`);
+		return info;
+	}
+
+	/**
+	 * 通过加密 kb_id 获取知识库根文件夹 ID（用于 cgi-bin 接口的 knowledge_base_id 参数）
+	 * Get KB root folder_id via private get_knowledge_list (used as knowledge_base_id for cgi-bin APIs)
+	 */
+	async getKbFolderId(encryptedKbId: string): Promise<string> {
+		const result = await this.post<{ current_path: Array<{ folder_id: string }> }>(
+			'openapi/wiki/v1/get_knowledge_list',
+			{ knowledge_base_id: encryptedKbId, cursor: '', limit: 1 },
+		);
+		return result.current_path?.[0]?.folder_id ?? '';
+	}
 }
 
 // ─── 公共知识库 API 客户端（无需认证）/ Public KB API client (no auth) ────────

@@ -60,8 +60,13 @@ export class SyncManager {
 
 		// 检查是否有任何同步任务可执行 / Check if any sync task is available
 		const hasPrivateWork = this.settings.syncNotes || this.settings.syncKnowledgeBase;
+		// 订阅知识库（encryptedKbId 非空且尚无 numericKbId）需要凭证做一次性 ID 转换
+		// Subscribed KB (has encryptedKbId but no numericKbId) needs credentials for one-time ID conversion
+		const hasSubscribedKBNeedingConversion = this.settings.publicKnowledgeBases.some(
+			kb => !!kb.encryptedKbId && !kb.numericKbId && !kb.shareId,
+		);
 		const hasPublicWork = this.settings.publicKnowledgeBases.length > 0;
-		if (hasPrivateWork && !hasCredentials) {
+		if ((hasPrivateWork || hasSubscribedKBNeedingConversion) && !hasCredentials) {
 			new Notice('IMA Sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
 			return;
 		}
@@ -238,12 +243,14 @@ export class SyncManager {
 			if (!pubKB.name) {
 				pubKB.name = result.knowledge_base_info.basic_info.name;
 			}
-		} else if (!numericKbId && pubKB.encryptedKbId) {
-			// 用公共 API 通过 encryptedKbId 获取数字 KB ID
-			// Use public API via encryptedKbId to get numeric KB ID
-			const kbListResult = await this.publicClient.getKnowledgeListPublic(pubKB.encryptedKbId);
-			numericKbId = kbListResult.current_path[0]?.folder_id ?? '';
-			pubKB.numericKbId = numericKbId;
+		} else if (!numericKbId && pubKB.encryptedKbId && this.client) {
+			// 订阅知识库：通过私有 API 获取根文件夹 ID，作为 cgi-bin 的 knowledge_base_id
+			// Subscribed KB: get root folder_id via private API, use as knowledge_base_id for cgi-bin
+			const folderId = await this.client.getKbFolderId(pubKB.encryptedKbId);
+			if (folderId) {
+				numericKbId = folderId;
+				pubKB.numericKbId = numericKbId;
+			}
 		}
 
 		// 获取所有条目 / Fetch all items
@@ -315,12 +322,12 @@ export class SyncManager {
 	): Promise<string | null> {
 		const fmBase = `---\nmedia_id: "${item.media_id}"\n`;
 
-		// 微信文章：raw_file_url / source_path 有完整微信 URL → 抓全文
-		// WeChat article: raw_file_url / source_path has full WeChat URL → fetch full content
+		// 微信文章：raw_file_url / source_path 有完整微信 URL → 清理追踪参数后抓全文
+		// WeChat article: raw_file_url / source_path has full WeChat URL → strip tracking params then fetch
 		if (item.media_type === 6) {
 			const url = item.raw_file_url || item.source_path;
 			if (url && url.startsWith('http')) {
-				return await this.syncWebContent(url, undefined, item.title, true, item.media_id);
+				return await this.syncWebContent(stripWeChatTrackingParams(url), undefined, item.title, true, item.media_id);
 			}
 		}
 
@@ -745,5 +752,31 @@ export class SyncManager {
 				console.warn(`IMA Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);
 			}
 		}
+	}
+}
+
+/**
+ * 去除微信文章 URL 中的追踪参数，只保留 __biz/mid/idx/sn 四个核心参数
+ * 带追踪参数的长链会被微信识别为非浏览器来源并触发人机验证
+ * Strip WeChat article URL tracking params, keep only __biz/mid/idx/sn
+ * Long URLs with tracking params trigger WeChat's bot verification
+ */
+function stripWeChatTrackingParams(url: string): string {
+	try {
+		const parsed = new URL(url);
+		if (!parsed.hostname.endsWith('weixin.qq.com') && !parsed.hostname.endsWith('mp.weixin.qq.com')) {
+			return url;
+		}
+		const keep = ['__biz', 'mid', 'idx', 'sn'];
+		const cleaned = new URL('https://mp.weixin.qq.com/s');
+		for (const key of keep) {
+			const val = parsed.searchParams.get(key);
+			if (val) cleaned.searchParams.set(key, val);
+		}
+		// 短链格式（/s/xxx）无参数，直接返回原 URL / Short link format (/s/xxx) has no params, return as-is
+		if (cleaned.searchParams.toString() === '') return url;
+		return cleaned.toString();
+	} catch {
+		return url;
 	}
 }
