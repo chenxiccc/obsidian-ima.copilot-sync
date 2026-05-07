@@ -145,47 +145,51 @@ export class SyncManager {
 			}
 		}
 
-		// ── 同步私有知识库 / Sync private knowledge base ──
+		// ── 同步个人知识库（多选）/ Sync personal knowledge bases (multi-select) ──
 		if (this.settings.syncKnowledgeBase && this.client) {
-			const kbId = this.settings.knowledgeBaseId.trim();
-			if (!kbId) {
-				new Notice('IMA Sync: 请在设置中填写知识库 ID');
-			} else {
-				const kbName = this.settings.knowledgeBaseName;
-				const kbOpts = this.buildAttachmentOptions(kbName || undefined, '个人知识库');
-				const kbFolder = normalizePath(`${syncFolder}/个人知识库/${sanitizeFilename(kbName || kbId)}`);
-				await ensureFolder(this.vault, kbFolder);
+			for (const pkb of this.settings.personalKnowledgeBases) {
+				const kbId = pkb.kbId.trim();
+				if (!kbId) continue;
+				try {
+					const kbName = pkb.name;
+					const kbOpts = this.buildAttachmentOptions(kbName || undefined, '个人知识库');
+					const kbFolder = normalizePath(`${syncFolder}/个人知识库/${sanitizeFilename(kbName || kbId)}`);
+					await ensureFolder(this.vault, kbFolder);
 
-				const existingMap = this.scanExistingKbFiles(kbFolder);
-				const items = await this.client.listAllKnowledgeItems(kbId);
+					const existingMap = this.scanExistingKbFiles(kbFolder);
+					const items = await this.client.listAllKnowledgeItems(kbId);
 
-				// 删除同步 / Delete sync
-				const apiMediaIds = new Set(items.map(i => i.media_id));
-				for (const [mediaId, filePath] of existingMap) {
-					if (!apiMediaIds.has(mediaId)) {
+					// 删除同步 / Delete sync
+					const apiMediaIds = new Set(items.map(i => i.media_id));
+					for (const [mediaId, filePath] of existingMap) {
+						if (!apiMediaIds.has(mediaId)) {
+							try {
+								await this.handleDeletedItem(filePath, opts);
+							} catch (err) {
+								console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+							}
+							existingMap.delete(mediaId);
+						}
+					}
+
+					// 增量同步 / Incremental sync
+					for (const item of items) {
 						try {
-							await this.handleDeletedItem(filePath, opts);
+							if (existingMap.has(item.media_id)) continue;
+							const filename = sanitizeFilename(item.title || item.media_id);
+							const filePath = normalizePath(`${kbFolder}/${filename}.md`);
+							const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
+							if (content !== null) {
+								await this.writeNote(filePath, content, opts);
+								syncedCount++;
+							}
 						} catch (err) {
-							console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+							console.warn(`IMA Sync: 知识库条目 "${item.title}" 同步失败`, err);
 						}
-						existingMap.delete(mediaId);
 					}
-				}
-
-				// 增量同步 / Incremental sync
-				for (const item of items) {
-					try {
-						if (existingMap.has(item.media_id)) continue;
-						const filename = sanitizeFilename(item.title || item.media_id);
-						const filePath = normalizePath(`${kbFolder}/${filename}.md`);
-						const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
-						if (content !== null) {
-							await this.writeNote(filePath, content, opts);
-							syncedCount++;
-						}
-					} catch (err) {
-						console.warn(`IMA Sync: 知识库条目 "${item.title}" 同步失败`, err);
-					}
+				} catch (err) {
+					console.warn(`IMA Sync: 个人知识库 "${pkb.name}" 同步失败`, err);
+					new Notice(`IMA Sync: 个人知识库 "${pkb.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}
 		}

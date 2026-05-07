@@ -29,6 +29,7 @@
 	border-radius: 8px;
 	padding: 4px 0;
 	margin-bottom: 16px;
+	overflow: hidden;
 }
 
 /* 知识库分组框：消除内部 setting-item 的分割线
@@ -41,6 +42,7 @@
 /* 知识库列表容器 / Knowledge base list container */
 .ima-kb-list {
 	margin-bottom: 12px;
+	padding: 0 20px;
 }
 
 /* 知识库列表行布局 / Knowledge base list row layout */
@@ -86,6 +88,7 @@
 /* 已添加的公共知识库列表 / Added public KB list */
 .ima-pubkb-list {
 	margin-bottom: 12px;
+	padding: 0 20px;
 }
 
 /* 公共知识库行布局 / Public KB row layout */

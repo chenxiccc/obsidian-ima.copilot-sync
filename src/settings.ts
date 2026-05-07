@@ -26,6 +26,14 @@ export const SECRET_ID_CLIENT = 'ima-client-id';
 /** SecretStorage 中存储 API Key 的密钥名 / Key name for API Key in SecretStorage */
 export const SECRET_ID_API_KEY = 'ima-api-key';
 
+/** 个人知识库条目 / Personal knowledge base entry */
+export interface PersonalKnowledgeBase {
+	/** 加密 kb_id / Encrypted kb_id */
+	kbId: string;
+	/** 知识库名称 / KB name */
+	name: string;
+}
+
 export interface ImaPluginSettings {
 	/** vault 内的同步文件夹名 / Sync folder name within vault */
 	syncFolder: string;
@@ -35,10 +43,8 @@ export interface ImaPluginSettings {
 	syncNotes: boolean;
 	/** 是否同步知识库 / Whether to sync knowledge base */
 	syncKnowledgeBase: boolean;
-	/** 要同步的知识库 ID / Knowledge base ID to sync */
-	knowledgeBaseId: string;
-	/** 要同步的知识库名称（缓存，避免同步时再查 API）/ KB name (cached to avoid API lookup during sync) */
-	knowledgeBaseName: string;
+	/** 要同步的个人知识库列表 / Personal KB list to sync */
+	personalKnowledgeBases: PersonalKnowledgeBase[];
 	/**
 	 * 上次同步时间戳（毫秒），存入 data.json，不展示在 UI 中
 	 * Last sync timestamp in ms, stored in data.json, not shown in UI
@@ -67,8 +73,7 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	syncIntervalMinutes: 60,
 	syncNotes: true,
 	syncKnowledgeBase: false,
-	knowledgeBaseId: '',
-	knowledgeBaseName: '',
+	personalKnowledgeBases: [],
 	lastSyncTime: 0,
 	enableDebugLog: false,
 	linkFormat: 'auto',
@@ -256,13 +261,20 @@ export class ImaSettingTab extends PluginSettingTab {
 		const kbSelectedSetting = new Setting(kbBox)
 			.setName('选择要同步的个人和订阅知识库')
 			.setDesc(
-				this.plugin.settings.knowledgeBaseId
-					? `当前已选：${this.plugin.settings.knowledgeBaseId}`
+				this.plugin.settings.personalKnowledgeBases.length > 0
+					? `已选 ${this.plugin.settings.personalKnowledgeBases.length} 个个人知识库，${this.plugin.settings.publicKnowledgeBases.length} 个公共/订阅知识库`
 					: '未选择知识库',
 			);
 
-		// 知识库列表容器（默认隐藏）/ KB list container (hidden by default)
+		// 知识库列表容器（默认隐藏，在 kbBox 内）/ KB list container (hidden by default, inside kbBox)
 		const kbListContainer = kbBox.createDiv({ cls: 'ima-kb-list ima-hidden' });
+
+		/** 更新已选描述 / Update selection description */
+		const updateKbDesc = () => {
+			const p = this.plugin.settings.personalKnowledgeBases.length;
+			const s = this.plugin.settings.publicKnowledgeBases.length;
+			kbSelectedSetting.setDesc(p > 0 || s > 0 ? `已选 ${p} 个个人知识库，${s} 个公共/订阅知识库` : '未选择知识库');
+		};
 
 		/** 渲染知识库选项列表（分组：个人 + 订阅）/ Render KB list (grouped: personal + subscribed) */
 		const renderKbList = (bases: SearchedKnowledgeBase[]) => {
@@ -278,26 +290,38 @@ export class ImaSettingTab extends PluginSettingTab {
 				header.textContent = '个人知识库';
 				for (const base of personal) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
-					const radio = row.createEl('input') as HTMLInputElement;
-					radio.type = 'radio';
-					radio.name = 'ima-kb-radio';
-					radio.value = base.kb_id;
-					radio.checked = base.kb_id === this.plugin.settings.knowledgeBaseId;
+					const checkbox = row.createEl('input') as HTMLInputElement;
+					checkbox.type = 'checkbox';
+					checkbox.className = 'ima-kb-checkbox';
+					checkbox.checked = this.plugin.settings.personalKnowledgeBases.some(
+						p => p.kbId === base.kb_id,
+					);
 
 					const label = row.createEl('label');
 					label.textContent = `${base.kb_name}`;
 					const idSpan = label.createEl('span', { cls: 'ima-kb-id' });
 					idSpan.textContent = `  (${base.content_count} 个内容)`;
 
-					const select = async () => {
-						radio.checked = true;
-						this.plugin.settings.knowledgeBaseId = base.kb_id;
-						this.plugin.settings.knowledgeBaseName = base.kb_name;
+					const onToggle = async () => {
+						if (checkbox.checked) {
+							this.plugin.settings.personalKnowledgeBases.push({
+								kbId: base.kb_id,
+								name: base.kb_name,
+							});
+						} else {
+							this.plugin.settings.personalKnowledgeBases =
+								this.plugin.settings.personalKnowledgeBases.filter(
+									p => p.kbId !== base.kb_id,
+								);
+						}
 						await this.plugin.saveSettings();
-						kbSelectedSetting.setDesc(`当前已选：${base.kb_name}`);
+						updateKbDesc();
 					};
-					radio.addEventListener('change', select);
-					label.addEventListener('click', select);
+					checkbox.addEventListener('change', onToggle);
+					label.addEventListener('click', () => {
+						checkbox.checked = !checkbox.checked;
+						onToggle();
+					});
 				}
 			}
 
@@ -335,6 +359,7 @@ export class ImaSettingTab extends PluginSettingTab {
 								);
 						}
 						await this.plugin.saveSettings();
+						updateKbDesc();
 						renderPublicKbList();
 					};
 					checkbox.addEventListener('change', onToggle);
@@ -351,7 +376,8 @@ export class ImaSettingTab extends PluginSettingTab {
 			btn
 				.setButtonText('查看并选择知识库')
 				.onClick(async () => {
-					if (!kbListContainer.hasClass('ima-hidden') && kbListContainer.childElementCount > 0) {
+					// 收起列表 / Collapse list
+					if (!kbListContainer.hasClass('ima-hidden')) {
 						kbListContainer.addClass('ima-hidden');
 						btn.setButtonText('查看并选择知识库');
 						return;
@@ -370,6 +396,7 @@ export class ImaSettingTab extends PluginSettingTab {
 						const bases = await client.searchKnowledgeBases();
 						if (bases.length === 0) {
 							new Notice('未找到任何知识库');
+							btn.setButtonText('查看并选择知识库');
 						} else {
 							renderKbList(bases);
 							btn.setButtonText('收起列表');
