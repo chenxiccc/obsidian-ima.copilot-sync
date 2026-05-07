@@ -1,6 +1,7 @@
 import { App, PluginSettingTab, Setting, Notice } from 'obsidian';
 import type ImaPlugin from './main';
-import { ImaClient } from './ima-client';
+import { ImaClient, ImaPublicClient } from './ima-client';
+import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
 
 // ─── 设置数据结构 / Settings data structure ────────────────────────────────
 
@@ -63,6 +64,10 @@ export interface ImaPluginSettings {
 	attachmentSizeLimit: number;
 	/** 附件大小限制单位 / Attachment size limit unit */
 	attachmentSizeLimitUnit: AttachmentSizeUnit;
+	/** 是否同步公共/订阅知识库 / Whether to sync public/subscribed KBs */
+	syncPublicKnowledgeBases: boolean;
+	/** 公共/订阅知识库列表 / Public/subscribed KB list */
+	publicKnowledgeBases: PublicKnowledgeBase[];
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
@@ -80,6 +85,8 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	downloadAttachments: false,
 	attachmentSizeLimit: 0,
 	attachmentSizeLimitUnit: 'MB',
+	syncPublicKnowledgeBases: false,
+	publicKnowledgeBases: [],
 };
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
@@ -141,8 +148,6 @@ export class ImaSettingTab extends PluginSettingTab {
 							return;
 						}
 
-						// 解析格式：API Key: xxx 和 Client ID: xxx（顺序无关）
-						// Parse format: API Key: xxx and Client ID: xxx (order-independent)
 						const apiKeyMatch = text.match(/API\s*Key\s*[:：]\s*(.+)/i);
 						const clientIdMatch = text.match(/Client\s*ID\s*[:：]\s*(.+)/i);
 
@@ -151,7 +156,6 @@ export class ImaSettingTab extends PluginSettingTab {
 							return;
 						}
 
-						// 写入 SecretStorage 而非 data.json / Write to SecretStorage instead of data.json
 						if (clientIdMatch) {
 							this.app.secretStorage.setSecret(SECRET_ID_CLIENT, clientIdMatch[1]?.trim() ?? '');
 						}
@@ -159,7 +163,6 @@ export class ImaSettingTab extends PluginSettingTab {
 							this.app.secretStorage.setSecret(SECRET_ID_API_KEY, apiKeyMatch[1]?.trim() ?? '');
 						}
 
-						// 刷新页面以更新输入框显示 / Refresh page to update input display
 						this.display();
 						new Notice('凭证已配置至安全存储');
 					}),
@@ -175,7 +178,6 @@ export class ImaSettingTab extends PluginSettingTab {
 					.onChange(async value => {
 						this.app.secretStorage.setSecret(SECRET_ID_CLIENT, value.trim());
 					});
-				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
 				text.inputEl.addClass('ima-input-wide');
 			});
 
@@ -189,9 +191,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					.onChange(async value => {
 						this.app.secretStorage.setSecret(SECRET_ID_API_KEY, value.trim());
 					});
-				// 隐藏输入内容 / Hide input content
 				text.inputEl.type = 'password';
-				// 拉长输入框，适应 100 字符 / Widen input to fit 100 chars
 				text.inputEl.addClass('ima-input-wide');
 			});
 
@@ -251,7 +251,8 @@ export class ImaSettingTab extends PluginSettingTab {
 					}),
 			);
 
-		// 已选知识库展示行 / Currently selected knowledge base display row
+		// ── 知识库选择（个人 + 订阅）/ KB selection (personal + subscribed) ──
+
 		const kbSelectedSetting = new Setting(containerEl)
 			.setName('选择要同步的知识库')
 			.setDesc(
@@ -260,37 +261,86 @@ export class ImaSettingTab extends PluginSettingTab {
 					: '未选择知识库',
 			);
 
-		// 知识库列表容器（默认隐藏）/ Knowledge base list container (hidden by default)
+		// 知识库列表容器（默认隐藏）/ KB list container (hidden by default)
 		const kbListContainer = containerEl.createDiv({ cls: 'ima-kb-list ima-hidden' });
 
-		/** 渲染知识库选项列表 / Render knowledge base option list */
-		const renderKbList = (bases: Array<{ id: string; name: string }>) => {
+		/** 渲染知识库选项列表（分组：个人 + 订阅）/ Render KB list (grouped: personal + subscribed) */
+		const renderKbList = (bases: SearchedKnowledgeBase[]) => {
 			kbListContainer.empty();
 			kbListContainer.removeClass('ima-hidden');
 
-			for (const base of bases) {
-				const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
+			// 按类型分组：个人在前，订阅在后 / Group by type: personal first, subscribed after
+			const personal = bases.filter(b => b.base_type === '个人知识库');
+			const subscribed = bases.filter(b => b.base_type !== '个人知识库');
 
-				const radio = row.createEl('input') as HTMLInputElement;
-				radio.type = 'radio';
-				radio.name = 'ima-kb-radio';
-				radio.value = base.id;
-				radio.checked = base.id === this.plugin.settings.knowledgeBaseId;
+			if (personal.length > 0) {
+				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
+				header.textContent = '个人知识库';
+				for (const base of personal) {
+					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
+					const radio = row.createEl('input') as HTMLInputElement;
+					radio.type = 'radio';
+					radio.name = 'ima-kb-radio';
+					radio.value = base.kb_id;
+					radio.checked = base.kb_id === this.plugin.settings.knowledgeBaseId;
 
-				const label = row.createEl('label');
-				label.textContent = `${base.name}`;
-				const idSpan = label.createEl('span', { cls: 'ima-kb-id' });
-				idSpan.textContent = `  (${base.id})`;
+					const label = row.createEl('label');
+					label.textContent = `${base.kb_name}`;
+					const idSpan = label.createEl('span', { cls: 'ima-kb-id' });
+					idSpan.textContent = `  (${base.content_count} 个内容)`;
 
-				// 点击整行也可以选中 / Clicking the whole row selects
-				const select = async () => {
-					radio.checked = true;
-					this.plugin.settings.knowledgeBaseId = base.id;
-					await this.plugin.saveSettings();
-					kbSelectedSetting.setDesc(`当前已选：${base.name}（${base.id}）`);
-				};
-				radio.addEventListener('change', select);
-				label.addEventListener('click', select);
+					const select = async () => {
+						radio.checked = true;
+						this.plugin.settings.knowledgeBaseId = base.kb_id;
+						await this.plugin.saveSettings();
+						kbSelectedSetting.setDesc(`当前已选：${base.kb_name}`);
+					};
+					radio.addEventListener('change', select);
+					label.addEventListener('click', select);
+				}
+			}
+
+			if (subscribed.length > 0) {
+				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
+				header.textContent = '我加入的订阅知识库';
+				for (const base of subscribed) {
+					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
+					const checkbox = row.createEl('input') as HTMLInputElement;
+					checkbox.type = 'checkbox';
+					checkbox.className = 'ima-kb-checkbox';
+					checkbox.checked = this.plugin.settings.publicKnowledgeBases.some(
+						p => p.encryptedKbId === base.kb_id,
+					);
+
+					const label = row.createEl('label');
+					label.textContent = `${base.kb_name}`;
+					const infoSpan = label.createEl('span', { cls: 'ima-kb-id' });
+					infoSpan.textContent = `  (${base.content_count} 个内容, ${base.member_count} 人订阅)`;
+
+					const toggle = async () => {
+						checkbox.checked = !checkbox.checked;
+						if (checkbox.checked) {
+							// 添加到公共知识库列表 / Add to public KB list
+							this.plugin.settings.publicKnowledgeBases.push({
+								encryptedKbId: base.kb_id,
+								numericKbId: '', // 同步时从 API 获取 / Fetched from API during sync
+								shareId: '',
+								name: base.kb_name,
+								lastSyncTime: 0,
+							});
+						} else {
+							// 从列表移除 / Remove from list
+							this.plugin.settings.publicKnowledgeBases =
+								this.plugin.settings.publicKnowledgeBases.filter(
+									p => p.encryptedKbId !== base.kb_id,
+								);
+						}
+						await this.plugin.saveSettings();
+						renderPublicKbList();
+					};
+					checkbox.addEventListener('change', toggle);
+					label.addEventListener('click', toggle);
+				}
 			}
 		};
 
@@ -298,7 +348,6 @@ export class ImaSettingTab extends PluginSettingTab {
 			btn
 				.setButtonText('查看并选择知识库')
 				.onClick(async () => {
-					// 切换显示/隐藏 / Toggle show/hide
 					if (!kbListContainer.hasClass('ima-hidden') && kbListContainer.childElementCount > 0) {
 						kbListContainer.addClass('ima-hidden');
 						btn.setButtonText('查看并选择知识库');
@@ -315,7 +364,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					btn.setButtonText('加载中…');
 					try {
 						const client = new ImaClient(clientId, apiKey);
-						const bases = await client.listKnowledgeBases();
+						const bases = await client.searchKnowledgeBases();
 						if (bases.length === 0) {
 							new Notice('未找到任何知识库');
 						} else {
@@ -330,6 +379,105 @@ export class ImaSettingTab extends PluginSettingTab {
 					}
 				}),
 		);
+
+		// ── 公共知识库同步开关 + 手动添加 / Public KB toggle + manual add ──
+
+		new Setting(containerEl)
+			.setName('同步公共知识库')
+			.setDesc('同步通过分享链接添加的公共知识库（无需认证）')
+			.addToggle(toggle =>
+				toggle
+					.setValue(this.plugin.settings.syncPublicKnowledgeBases)
+					.onChange(async value => {
+						this.plugin.settings.syncPublicKnowledgeBases = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		// 手动添加公共知识库 / Manually add public KB
+		new Setting(containerEl)
+			.setName('添加公共知识库')
+			.setDesc('粘贴分享链接或 shareId，如 https://ima.qq.com/wiki/?shareId=xxx')
+			.addText(text => {
+				text.setPlaceholder('粘贴分享链接或 shareId');
+				text.inputEl.addClass('ima-input-wide');
+			})
+			.addButton(btn =>
+				btn
+					.setButtonText('添加')
+					.onClick(async () => {
+						const input = btn.buttonEl.parentElement?.querySelector('input') as HTMLInputElement;
+						const rawInput = input?.value ?? '';
+						const shareId = ImaPublicClient.parseShareId(rawInput);
+						if (!shareId) {
+							new Notice('无法解析分享链接，请确认格式正确');
+							return;
+						}
+						// 检查是否已添加 / Check if already added
+						if (this.plugin.settings.publicKnowledgeBases.some(p => p.shareId === shareId)) {
+							new Notice('该知识库已添加');
+							return;
+						}
+						btn.setDisabled(true);
+						btn.setButtonText('添加中…');
+						try {
+							const pubClient = new ImaPublicClient();
+							const result = await pubClient.getShareInfo(shareId);
+							const kbInfo = pubClient.extractKBInfo(result);
+							this.plugin.settings.publicKnowledgeBases.push({
+								encryptedKbId: '',
+								numericKbId: kbInfo.id,
+								shareId,
+								name: kbInfo.name,
+								lastSyncTime: 0,
+							});
+							await this.plugin.saveSettings();
+							input.value = '';
+							new Notice(`已添加公共知识库：${kbInfo.name}`);
+							renderPublicKbList();
+						} catch (err) {
+							new Notice(`添加失败：${err instanceof Error ? err.message : String(err)}`);
+						} finally {
+							btn.setDisabled(false);
+							btn.setButtonText('添加');
+						}
+					}),
+			);
+
+		// 已添加的公共知识库列表 / Added public KB list
+		const publicKbListContainer = containerEl.createDiv({ cls: 'ima-pubkb-list' });
+
+		/** 渲染已添加的公共知识库列表 / Render added public KB list */
+		const renderPublicKbList = () => {
+			publicKbListContainer.empty();
+			const bases = this.plugin.settings.publicKnowledgeBases;
+			if (bases.length === 0) return;
+
+			const header = publicKbListContainer.createDiv({ cls: 'ima-kb-group-header' });
+			header.textContent = '已配置的公共知识库';
+
+			for (const base of bases) {
+				const row = publicKbListContainer.createDiv({ cls: 'ima-pubkb-row' });
+				const nameSpan = row.createEl('span', { cls: 'ima-pubkb-name' });
+				nameSpan.textContent = base.name;
+				const timeSpan = row.createEl('span', { cls: 'ima-pubkb-time' });
+				timeSpan.textContent = base.lastSyncTime > 0
+					? `上次同步：${new Date(base.lastSyncTime).toLocaleString()}`
+					: '从未同步';
+
+				const delBtn = row.createEl('button', { cls: 'ima-pubkb-del' });
+				delBtn.textContent = '删除';
+				delBtn.addEventListener('click', async () => {
+					this.plugin.settings.publicKnowledgeBases =
+						this.plugin.settings.publicKnowledgeBases.filter(
+							p => p !== base,
+						);
+					await this.plugin.saveSettings();
+					renderPublicKbList();
+				});
+			}
+		};
+		renderPublicKbList();
 
 		// ── 同步设置 / Sync settings ─────────────────────────────────────────
 
@@ -349,7 +497,6 @@ export class ImaSettingTab extends PluginSettingTab {
 							await this.plugin.migrateSyncFolder(oldFolder, newFolder);
 						} catch (err) {
 							new Notice(`文件夹迁移失败：${err instanceof Error ? err.message : String(err)}`);
-							// 回写旧值 / Reset to old value
 							text.setValue(oldFolder);
 							return;
 						}
@@ -378,7 +525,6 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		// ── 附件路径设置 / Attachment path settings ──────────────────────────
 
-		// 把下拉和输入框合并到同一行 / Merge dropdown and text input into one row
 		let subfolderInput: HTMLInputElement | null = null;
 
 		new Setting(containerEl)
@@ -393,14 +539,12 @@ export class ImaSettingTab extends PluginSettingTab {
 					.onChange(async value => {
 						this.plugin.settings.attachmentPathMode = value as AttachmentPathMode;
 						await this.plugin.saveSettings();
-						// 控制文件夹名输入框的显示 / Show/hide subfolder name input
 						if (subfolderInput) {
 							subfolderInput.toggleClass('ima-hidden', value !== 'subfolder');
 						}
 					});
 			})
 			.addText(text => {
-				// 子文件夹名输入框，紧跟下拉框 / Subfolder name input, right after dropdown
 				text
 					.setPlaceholder('attachments')
 					.setValue(this.plugin.settings.attachmentSubfolderName)
@@ -432,71 +576,71 @@ export class ImaSettingTab extends PluginSettingTab {
 					});
 			});
 
-			// ── 知识库删除同步 / KB delete sync ────────────────────────────────
+		// ── 知识库删除同步 / KB delete sync ────────────────────────────────
 
-			new Setting(containerEl)
-				.setName('知识库删除同步')
-				.setDesc('IMA 知识库中删除条目后，本地文件的处理方式')
-				.addDropdown(drop => {
-					drop
-						.addOption('delete', '删除本地文件')
-						.addOption('keep', '保留本地文件')
-						.addOption('mark-deleted', '标记 [deleted]（保留文件，标题加后缀）')
-						.setValue(this.plugin.settings.syncDeleteMode)
-						.onChange(async value => {
-							this.plugin.settings.syncDeleteMode = value as SyncDeleteMode;
-							await this.plugin.saveSettings();
-						});
-				});
+		new Setting(containerEl)
+			.setName('知识库删除同步')
+			.setDesc('IMA 知识库中删除条目后，本地文件的处理方式')
+			.addDropdown(drop => {
+				drop
+					.addOption('delete', '删除本地文件')
+					.addOption('keep', '保留本地文件')
+					.addOption('mark-deleted', '标记 [deleted]（保留文件，标题加后缀）')
+					.setValue(this.plugin.settings.syncDeleteMode)
+					.onChange(async value => {
+						this.plugin.settings.syncDeleteMode = value as SyncDeleteMode;
+						await this.plugin.saveSettings();
+					});
+			});
 
-			// ── 附件下载设置 / Attachment download settings ──────────────────────
+		// ── 附件下载设置 / Attachment download settings ──────────────────────
 
-			let sizeLimitContainer: HTMLDivElement | null = null;
+		let sizeLimitContainer: HTMLDivElement | null = null;
 
-			new Setting(containerEl)
-				.setName('下载附件')
-				.setDesc('将图片、PDF 等附件下载到本地（关闭则保留原始链接）')
-				.addToggle(toggle =>
-					toggle
-						.setValue(this.plugin.settings.downloadAttachments)
-						.onChange(async value => {
-							this.plugin.settings.downloadAttachments = value;
-							await this.plugin.saveSettings();
-							if (sizeLimitContainer) {
-								sizeLimitContainer.toggleClass('ima-hidden', !value);
-							}
-						}),
-				);
+		new Setting(containerEl)
+			.setName('下载附件')
+			.setDesc('将图片、PDF 等附件下载到本地（关闭则保留原始链接）')
+			.addToggle(toggle =>
+				toggle
+					.setValue(this.plugin.settings.downloadAttachments)
+					.onChange(async value => {
+						this.plugin.settings.downloadAttachments = value;
+						await this.plugin.saveSettings();
+						if (sizeLimitContainer) {
+							sizeLimitContainer.toggleClass('ima-hidden', !value);
+						}
+					}),
+			);
 
-			sizeLimitContainer = containerEl.createDiv();
-			if (!this.plugin.settings.downloadAttachments) {
-				sizeLimitContainer.addClass('ima-hidden');
-			}
+		sizeLimitContainer = containerEl.createDiv();
+		if (!this.plugin.settings.downloadAttachments) {
+			sizeLimitContainer.addClass('ima-hidden');
+		}
 
-			new Setting(sizeLimitContainer)
-				.setName('附件大小限制')
-				.setDesc('超过限制的附件保留原始链接，不下载（0 = 不限制）')
-				.addText(text =>
-					text
-						.setPlaceholder('0')
-						.setValue(String(this.plugin.settings.attachmentSizeLimit))
-						.onChange(async value => {
-							const num = parseFloat(value);
-							this.plugin.settings.attachmentSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
-							await this.plugin.saveSettings();
-						}),
-				)
-				.addDropdown(drop =>
-					drop
-						.addOption('KB', 'KB')
-						.addOption('MB', 'MB')
-						.addOption('GB', 'GB')
-						.setValue(this.plugin.settings.attachmentSizeLimitUnit)
-						.onChange(async value => {
-							this.plugin.settings.attachmentSizeLimitUnit = value as AttachmentSizeUnit;
-							await this.plugin.saveSettings();
-						}),
-				);
+		new Setting(sizeLimitContainer)
+			.setName('附件大小限制')
+			.setDesc('超过限制的附件保留原始链接，不下载（0 = 不限制）')
+			.addText(text =>
+				text
+					.setPlaceholder('0')
+					.setValue(String(this.plugin.settings.attachmentSizeLimit))
+					.onChange(async value => {
+						const num = parseFloat(value);
+						this.plugin.settings.attachmentSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
+						await this.plugin.saveSettings();
+					}),
+			)
+			.addDropdown(drop =>
+				drop
+					.addOption('KB', 'KB')
+					.addOption('MB', 'MB')
+					.addOption('GB', 'GB')
+					.setValue(this.plugin.settings.attachmentSizeLimitUnit)
+					.onChange(async value => {
+						this.plugin.settings.attachmentSizeLimitUnit = value as AttachmentSizeUnit;
+						await this.plugin.saveSettings();
+					}),
+			);
 
 		// ── 手动同步 / Manual sync ──────────────────────────────────────────
 
@@ -507,8 +651,6 @@ export class ImaSettingTab extends PluginSettingTab {
 				btn
 					.setButtonText('立即同步')
 					.onClick(async () => {
-						// 重置 lastSyncTime 以触发全量同步
-						// Reset lastSyncTime to trigger full sync
 						this.plugin.settings.lastSyncTime = 0;
 						await this.plugin.saveSettings();
 						await this.plugin.triggerSync();

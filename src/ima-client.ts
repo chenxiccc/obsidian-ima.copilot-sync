@@ -79,6 +79,26 @@ interface ListAddableKBResponse {
 	is_end: boolean;
 }
 
+// 知识库搜索结果 / Knowledge base search result
+export interface SearchedKnowledgeBase {
+	kb_id: string;
+	kb_name: string;
+	cover_url: string;
+	member_count: string;
+	content_count: string;
+	description: string;
+	creator: string;
+	role_type: string;
+	/** "我加入的订阅知识库" 或 "个人知识库" / "Subscribed" or "Personal" */
+	base_type: string;
+}
+
+interface SearchKBResponse {
+	info_list: SearchedKnowledgeBase[];
+	is_end: boolean;
+	next_cursor: string;
+}
+
 // get_media_info 响应类型 / get_media_info response types
 
 /** 访问链接信息 / Access URL info */
@@ -241,6 +261,27 @@ export class ImaClient {
 	}
 
 	/**
+	 * 搜索/列出知识库，含 base_type 区分订阅/个人
+	 * Search/list knowledge bases, with base_type distinguishing subscribed/personal
+	 */
+	async searchKnowledgeBases(query = ''): Promise<SearchedKnowledgeBase[]> {
+		const bases: SearchedKnowledgeBase[] = [];
+		let cursor = '';
+
+		while (true) {
+			const result = await this.post<SearchKBResponse>(
+				'openapi/wiki/v1/search_knowledge_base',
+				{ query, cursor, limit: 20 },
+			);
+			bases.push(...result.info_list);
+			if (result.is_end) break;
+			cursor = result.next_cursor;
+		}
+
+		return bases;
+	}
+
+	/**
 	 * 分页拉取知识库中所有条目（仅文件，不含文件夹）
 	 * Fetch all items in a knowledge base (files only, not folders)
 	 */
@@ -292,5 +333,258 @@ export class ImaClient {
 			url_info: data.url_info,
 			notebook_ext_info: data.notebook_ext_info,
 		};
+	}
+}
+
+// ─── 公共知识库 API 客户端（无需认证）/ Public KB API client (no auth) ────────
+
+/** 公共知识库条目 / Public KB item from cgi-bin API */
+export interface PublicKBItem {
+	media_id: string;
+	title: string;
+	media_type: number;
+	parent_folder_id: string;
+	/** 预览文本 / Preview text */
+	introduction: string;
+	/** AI 摘要 / AI abstract */
+	abstract: string;
+	/** 微信文章/文件直链 / Direct URL for WeChat articles/files */
+	raw_file_url: string;
+	/** 网页原链接 / Original URL for webpages */
+	source_path: string;
+	/** 封面图 / Cover image URLs */
+	cover_urls: string[];
+	/** 文件大小 / File size */
+	file_size: string;
+	/** 创建时间（Unix 毫秒）/ Create time (Unix ms) */
+	create_time: string;
+	/** 更新时间（Unix 毫秒）/ Update time (Unix ms) */
+	update_time: string;
+	/** 最后修改时间（Unix 毫秒）/ Last modify time (Unix ms) */
+	last_modify_time: string;
+	/** 文件夹信息（media_type=99 时有值）/ Folder info (when media_type=99) */
+	folder_info: {
+		folder_id: string;
+		name: string;
+		file_number: string;
+		folder_number: string;
+		parent_folder_id: string;
+	} | null;
+}
+
+/** 公共知识库元信息 / Public KB metadata */
+export interface PublicKBInfo {
+	id: string;
+	name: string;
+	description: string;
+	creator: string;
+	member_count: number;
+	content_count: number;
+	/** 知识库更新时间（Unix 秒）/ KB update time (Unix seconds) */
+	update_timestamp_sec: string;
+}
+
+/** get_share_info / get_knowledge_list 响应 / Response from cgi-bin APIs */
+interface PublicKBListResponse {
+	knowledge_base_info: {
+		id: string;
+		basic_info: {
+			name: string;
+			description: string;
+			creator: { nickname: string };
+			update_timestamp_sec: string;
+		};
+		member_info: { member_count: string };
+	};
+	knowledge_list: PublicKBItem[];
+	is_end: boolean;
+	next_cursor: string;
+	current_path: Array<{
+		folder_id: string;
+		name: string;
+	}>;
+}
+
+/** 公共知识库设置条目 / Public KB settings entry */
+export interface PublicKnowledgeBase {
+	/** 加密 kb_id（从 search_knowledge_base 获取）/ Encrypted kb_id */
+	encryptedKbId: string;
+	/** 数字 KB ID / Numeric KB ID */
+	numericKbId: string;
+	/** shareId（手动添加时有值）/ shareId (when manually added) */
+	shareId: string;
+	/** 知识库名称 / KB name */
+	name: string;
+	/** 上次同步时间戳（毫秒），0 = 从未同步 / Last sync timestamp (ms), 0 = never */
+	lastSyncTime: number;
+}
+
+export class ImaPublicClient {
+	/** 通用 POST 请求（无认证）/ Generic POST request (no auth) */
+	private async post<T>(path: string, body: unknown): Promise<T> {
+		const response = await requestUrl({
+			url: `${BASE_URL}/${path}`,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+			throw: false,
+		});
+
+		debugLog(`status=${response.status} path=${path}`);
+		debugLog(`text=${response.text}`);
+
+		const result = response.json as { code?: number; msg?: string; data?: T };
+		const code = result.code ?? -1;
+		const msg = result.msg ?? 'unknown error';
+		if (code !== 0) {
+			throw new Error(`IMA 公共 API 错误 (${code}): ${msg}`);
+		}
+		// cgi-bin API 可能将数据放在 data 中或直接在顶层
+		// cgi-bin API may put data in `data` or at top level
+		return (result.data ?? result) as T;
+	}
+
+	/**
+	 * 通过 shareId 获取共享知识库信息及条目列表
+	 * Get shared KB info and item list via shareId
+	 */
+	async getShareInfo(
+		shareId: string,
+		folderId = '',
+		cursor = '',
+		limit = 20,
+	): Promise<PublicKBListResponse> {
+		return await this.post<PublicKBListResponse>(
+			'cgi-bin/knowledge_share_get/get_share_info',
+			{ share_id: shareId, cursor, limit, folder_id: folderId },
+		);
+	}
+
+	/**
+	 * 通过数字 KB ID 获取公共知识库条目列表（无需认证、无需 shareId）
+	 * Get public KB item list via numeric KB ID (no auth, no shareId needed)
+	 */
+	async getKnowledgeListPublic(
+		numericKbId: string,
+		folderId = '',
+		cursor = '',
+		limit = 20,
+	): Promise<PublicKBListResponse> {
+		return await this.post<PublicKBListResponse>(
+			'cgi-bin/knowledge_tab_reader_nl/get_knowledge_list',
+			{
+				knowledge_base_id: numericKbId,
+				cursor,
+				limit,
+				folder_id: folderId,
+				need_default_cover: true,
+				sort_type: 9,
+			},
+		);
+	}
+
+	/**
+	 * 从 PublicKBListResponse 提取知识库元信息
+	 * Extract KB metadata from response
+	 */
+	extractKBInfo(response: PublicKBListResponse): PublicKBInfo {
+		const kb = response.knowledge_base_info;
+		const basic = kb.basic_info;
+		return {
+			id: kb.id,
+			name: basic.name,
+			description: basic.description,
+			creator: basic.creator.nickname,
+			member_count: parseInt(kb.member_info.member_count) || 0,
+			content_count: 0,
+			update_timestamp_sec: basic.update_timestamp_sec,
+		};
+	}
+
+	/**
+	 * 递归获取公共知识库所有条目（含文件夹层级路径）
+	 * Recursively fetch all public KB items with folder path
+	 */
+	async listAllPublicItems(
+		numericKbId: string,
+		folderId = '',
+		folderPath = '',
+	): Promise<Array<PublicKBItem & { folderPath: string }>> {
+		const allItems: Array<PublicKBItem & { folderPath: string }> = [];
+		let cursor = '';
+
+		while (true) {
+			const result = await this.getKnowledgeListPublic(numericKbId, folderId, cursor, 50);
+			for (const item of result.knowledge_list) {
+				// 文件夹类型：递归进入 / Folder type: recurse into
+				if (item.media_type === 99 && item.folder_info) {
+					const subPath = folderPath
+						? `${folderPath}/${item.folder_info.name}`
+						: item.folder_info.name;
+					const subItems = await this.listAllPublicItems(
+						numericKbId,
+						item.folder_info.folder_id,
+						subPath,
+					);
+					allItems.push(...subItems);
+				} else if (item.media_type !== 99) {
+					allItems.push({ ...item, folderPath });
+				}
+			}
+			if (result.is_end) break;
+			cursor = result.next_cursor;
+		}
+
+		return allItems;
+	}
+
+	/**
+	 * 通过 shareId 递归获取所有条目
+	 * Recursively fetch all items via shareId
+	 */
+	async listAllSharedItems(
+		shareId: string,
+		folderId = '',
+		folderPath = '',
+	): Promise<Array<PublicKBItem & { folderPath: string }>> {
+		const allItems: Array<PublicKBItem & { folderPath: string }> = [];
+		let cursor = '';
+
+		while (true) {
+			const result = await this.getShareInfo(shareId, folderId, cursor, 50);
+			for (const item of result.knowledge_list) {
+				if (item.media_type === 99 && item.folder_info) {
+					const subPath = folderPath
+						? `${folderPath}/${item.folder_info.name}`
+						: item.folder_info.name;
+					const subItems = await this.listAllSharedItems(
+						shareId,
+						item.folder_info.folder_id,
+						subPath,
+					);
+					allItems.push(...subItems);
+				} else if (item.media_type !== 99) {
+					allItems.push({ ...item, folderPath });
+				}
+			}
+			if (result.is_end) break;
+			cursor = result.next_cursor;
+		}
+
+		return allItems;
+	}
+
+	/**
+	 * 从分享链接或文本中解析 shareId
+	 * Parse shareId from share link or text
+	 */
+	static parseShareId(input: string): string | null {
+		const trimmed = input.trim();
+		// 完整 URL: https://ima.qq.com/wiki/?shareId=xxx
+		const urlMatch = trimmed.match(/shareId=([a-f0-9]+)/i);
+		if (urlMatch && urlMatch[1]) return urlMatch[1];
+		// 纯 64 位十六进制字符串 / Bare 64-char hex string
+		if (/^[a-f0-9]{64}$/i.test(trimmed)) return trimmed;
+		return null;
 	}
 }

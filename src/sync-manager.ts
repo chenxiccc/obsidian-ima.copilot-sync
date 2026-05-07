@@ -1,8 +1,8 @@
 import { App, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
 import type { ImaPluginSettings } from './settings';
 import type { AttachmentOptions } from './image-handler';
-import type { KnowledgeInfo } from './ima-client';
-import { ImaClient } from './ima-client';
+import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
+import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { JsonToMarkdown } from './json-to-md';
 import { convertHtmlToMarkdown } from './html-to-md';
@@ -21,6 +21,7 @@ const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
 
 export class SyncManager {
 	private client: ImaClient | null = null;
+	private publicClient = new ImaPublicClient();
 	private imageHandler: ImageHandler;
 	private jsonToMd: JsonToMarkdown;
 	private fileDownloader: FileDownloader;
@@ -49,13 +50,25 @@ export class SyncManager {
 			return;
 		}
 
+		// 凭证仅私有同步需要；公共知识库同步无需凭证
+		// Credentials only needed for private sync; public KB sync doesn't need them
 		const { clientId, apiKey } = this.resolveCredentials();
-		if (!clientId || !apiKey) {
-			new Notice('IMA Sync: 请先在设置中填写 Client ID 和 API Key');
-			return;
+		const hasCredentials = !!(clientId && apiKey);
+		if (hasCredentials) {
+			this.rebuildClient();
 		}
 
-		this.rebuildClient();
+		// 检查是否有任何同步任务可执行 / Check if any sync task is available
+		const hasPrivateWork = this.settings.syncNotes || this.settings.syncKnowledgeBase;
+		const hasPublicWork = this.settings.syncPublicKnowledgeBases && this.settings.publicKnowledgeBases.length > 0;
+		if (hasPrivateWork && !hasCredentials) {
+			new Notice('IMA Sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
+			return;
+		}
+		if (!hasPrivateWork && !hasPublicWork) {
+			new Notice('IMA Sync: 没有可执行的同步任务');
+			return;
+		}
 
 		this.isSyncing = true;
 		new Notice('IMA Sync: 开始同步…');
@@ -108,7 +121,6 @@ export class SyncManager {
 
 	/** 核心同步逻辑 / Core sync logic */
 	private async doSync(): Promise<number> {
-		const client = this.client!;
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const opts = this.buildAttachmentOptions();
 
@@ -117,13 +129,13 @@ export class SyncManager {
 		let syncedCount = 0;
 
 		// ── 同步 IMA 笔记 / Sync IMA notes ──
-		if (this.settings.syncNotes) {
-			const notes = await client.listAllNotes(this.settings.lastSyncTime);
+		if (this.settings.syncNotes && this.client) {
+			const notes = await this.client.listAllNotes(this.settings.lastSyncTime);
 			for (const note of notes) {
 				try {
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
-					const rawJson = await client.getNoteContent(note.docid);
+					const rawJson = await this.client.getNoteContent(note.docid);
 					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts);
 					await this.writeNote(filePath, processedContent, opts);
 					syncedCount++;
@@ -133,8 +145,8 @@ export class SyncManager {
 			}
 		}
 
-		// ── 同步知识库 / Sync knowledge base ──
-		if (this.settings.syncKnowledgeBase) {
+		// ── 同步私有知识库 / Sync private knowledge base ──
+		if (this.settings.syncKnowledgeBase && this.client) {
 			const kbId = this.settings.knowledgeBaseId.trim();
 			if (!kbId) {
 				new Notice('IMA Sync: 请在设置中填写知识库 ID');
@@ -142,13 +154,10 @@ export class SyncManager {
 				const kbFolder = normalizePath(`${syncFolder}/知识库`);
 				await ensureFolder(this.vault, kbFolder);
 
-				// 扫描已有文件，构建 media_id → filePath 映射（增量同步判重，零 I/O）
-				// Scan existing files, build media_id → filePath map (incremental sync dedup, zero I/O)
 				const existingMap = this.scanExistingKbFiles(kbFolder);
+				const items = await this.client.listAllKnowledgeItems(kbId);
 
-				const items = await client.listAllKnowledgeItems(kbId);
-
-				// ── 删除同步：本地有但 API 没有 → 按设置处理 / Delete sync ──
+				// 删除同步 / Delete sync
 				const apiMediaIds = new Set(items.map(i => i.media_id));
 				for (const [mediaId, filePath] of existingMap) {
 					if (!apiMediaIds.has(mediaId)) {
@@ -161,15 +170,12 @@ export class SyncManager {
 					}
 				}
 
-				// ── 增量同步：API 有但本地没有 → 新建 / Incremental sync ──
+				// 增量同步 / Incremental sync
 				for (const item of items) {
 					try {
-						// 条目不可变，已存在则跳过 / Items are immutable, skip if exists
 						if (existingMap.has(item.media_id)) continue;
-
 						const filename = sanitizeFilename(item.title || item.media_id);
 						const filePath = normalizePath(`${kbFolder}/${filename}.md`);
-
 						const content = await this.syncKnowledgeItem(item, filePath, opts);
 						if (content !== null) {
 							await this.writeNote(filePath, content, opts);
@@ -182,6 +188,19 @@ export class SyncManager {
 			}
 		}
 
+		// ── 同步公共/订阅知识库 / Sync public/subscribed knowledge bases ──
+		if (this.settings.syncPublicKnowledgeBases) {
+			for (const pubKB of this.settings.publicKnowledgeBases) {
+				try {
+					const count = await this.syncPublicKnowledgeBase(pubKB, opts);
+					syncedCount += count;
+				} catch (err) {
+					console.warn(`IMA Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
+					new Notice(`IMA Sync: 公共知识库 "${pubKB.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
+				}
+			}
+		}
+
 		// ── 修复残留外链图片 / Fix leftover external image links ──
 		await this.fixPendingImages(syncFolder, opts);
 
@@ -189,6 +208,152 @@ export class SyncManager {
 		await this.saveSettings();
 
 		return syncedCount;
+	}
+
+	/**
+	 * 同步单个公共/订阅知识库
+	 * Sync a single public/subscribed knowledge base
+	 */
+	private async syncPublicKnowledgeBase(
+		pubKB: PublicKnowledgeBase,
+		opts: AttachmentOptions,
+	): Promise<number> {
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		const kbFolder = normalizePath(`${syncFolder}/知识库/${sanitizeFilename(pubKB.name || pubKB.shareId || pubKB.numericKbId)}`);
+		await ensureFolder(this.vault, kbFolder);
+
+		// 获取数字 KB ID（若尚未获取）/ Resolve numeric KB ID if not yet available
+		let numericKbId = pubKB.numericKbId;
+		if (!numericKbId && pubKB.shareId) {
+			const result = await this.publicClient.getShareInfo(pubKB.shareId);
+			numericKbId = result.knowledge_base_info.id;
+			pubKB.numericKbId = numericKbId;
+			if (!pubKB.name) {
+				pubKB.name = result.knowledge_base_info.basic_info.name;
+			}
+		} else if (!numericKbId && pubKB.encryptedKbId) {
+			// 用公共 API 通过 encryptedKbId 获取数字 KB ID
+			// Use public API via encryptedKbId to get numeric KB ID
+			const kbListResult = await this.publicClient.getKnowledgeListPublic(pubKB.encryptedKbId);
+			numericKbId = kbListResult.current_path[0]?.folder_id ?? '';
+			pubKB.numericKbId = numericKbId;
+		}
+
+		// 获取所有条目 / Fetch all items
+		const items = numericKbId
+			? await this.publicClient.listAllPublicItems(numericKbId)
+			: pubKB.shareId
+				? await this.publicClient.listAllSharedItems(pubKB.shareId)
+				: [];
+
+		if (items.length === 0) {
+			console.warn(`IMA Sync: 公共知识库 "${pubKB.name}" 无条目或无法获取`);
+			return 0;
+		}
+
+		// 扫描已有文件 / Scan existing files
+		const existingMap = this.scanExistingKbFiles(kbFolder);
+
+		// 删除同步 / Delete sync
+		const apiMediaIds = new Set(items.map(i => i.media_id));
+		for (const [mediaId, filePath] of existingMap) {
+			if (!apiMediaIds.has(mediaId)) {
+				try {
+					await this.handleDeletedItem(filePath, opts);
+				} catch (err) {
+					console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+				}
+				existingMap.delete(mediaId);
+			}
+		}
+
+		// 增量同步 / Incremental sync
+		let count = 0;
+		for (const item of items) {
+			try {
+				if (existingMap.has(item.media_id)) continue;
+
+				const itemFolder = item.folderPath
+					? normalizePath(`${kbFolder}/${item.folderPath}`)
+					: kbFolder;
+				await ensureFolder(this.vault, itemFolder);
+				const filename = sanitizeFilename(item.title || item.media_id);
+				const filePath = normalizePath(`${itemFolder}/${filename}.md`);
+
+				const content = await this.syncPublicKBItem(item, filePath, opts);
+				if (content !== null) {
+					await this.writeNote(filePath, content, opts);
+					count++;
+				}
+			} catch (err) {
+				console.warn(`IMA Sync: 公共知识库条目 "${item.title}" 同步失败`, err);
+			}
+		}
+
+		// 更新同步时间 / Update last sync time
+		pubKB.lastSyncTime = Date.now();
+		await this.saveSettings();
+
+		return count;
+	}
+
+	/**
+	 * 同步单个公共知识库条目：按类型分发
+	 * Sync a single public KB item: dispatch by type
+	 */
+	private async syncPublicKBItem(
+		item: PublicKBItem & { folderPath: string },
+		filePath: string,
+		opts: AttachmentOptions,
+	): Promise<string | null> {
+		const fmBase = `---\nmedia_id: "${item.media_id}"\n`;
+
+		// 微信文章：raw_file_url / source_path 有完整微信 URL → 抓全文
+		// WeChat article: raw_file_url / source_path has full WeChat URL → fetch full content
+		if (item.media_type === 6) {
+			const url = item.raw_file_url || item.source_path;
+			if (url && url.startsWith('http')) {
+				return await this.syncWebContent(url, undefined, item.title, true, item.media_id);
+			}
+		}
+
+		// 网页：source_path 有原始 URL → 抓全文
+		// Webpage: source_path has original URL → fetch full content
+		if (item.media_type === 2) {
+			const url = item.source_path || item.raw_file_url;
+			if (url && url.startsWith('http')) {
+				return await this.syncWebContent(url, undefined, item.title, false, item.media_id);
+			}
+		}
+
+		// 笔记：introduction 提供预览（约 300 字符截断）
+		// Note: introduction provides preview (~300 chars truncated)
+		if (item.media_type === 11) {
+			const preview = item.introduction || item.abstract || '';
+			if (preview) {
+				return `${fmBase}content_type: preview\n---\n\n# ${item.title}\n\n${preview}\n\n> 此内容为笔记预览摘要，完整内容需要登录 IMA 查看。`;
+			}
+			return `${fmBase}content_type: preview\n---\n\n# ${item.title}\n\n> 无法获取此笔记的预览内容。`;
+		}
+
+		// 文件类型（PDF 等）：abstract/introduction 提供摘要，raw_file_url 是 COS 相对路径无法直接下载
+		// File types (PDF etc): abstract/introduction provide summary, raw_file_url is COS relative path (can't download directly)
+		if (FILE_MEDIA_TYPES.has(item.media_type)) {
+			const summary = item.abstract || item.introduction || '';
+			const typeLabel = MEDIA_TYPE_LABELS[item.media_type] ?? `类型 ${item.media_type}`;
+			if (summary) {
+				return `${fmBase}---\n\n# ${item.title}\n\n${summary}\n\n> 此内容为${typeLabel}的 AI 摘要，完整文件需要在 IMA 客户端中查看。`;
+			}
+			return `${fmBase}---\n\n# ${item.title}\n\n> 此条目为${typeLabel}，暂不支持自动下载。`;
+		}
+
+		// 其他类型 fallback / Other types fallback
+		const preview = item.introduction || item.abstract || '';
+		const typeLabel = MEDIA_TYPE_LABELS[item.media_type] ?? `类型 ${item.media_type}`;
+		if (preview) {
+			return `${fmBase}---\n\n# ${item.title}\n\n${preview}`;
+		}
+		return `${fmBase}---\n\n> 此条目为${typeLabel}，暂不支持自动同步内容。\n\n**标题**: ${item.title}`;
 	}
 
 	/**
@@ -229,7 +394,6 @@ export class SyncManager {
 			await this.vault.delete(file);
 			console.debug(`IMA Sync: 删除已移除条目 / Deleted removed item: ${filePath}`);
 		} else if (mode === 'mark-deleted') {
-			// 已标记则跳过 / Skip if already marked
 			if (filePath.includes('[deleted]')) return;
 			const newFilePath = filePath.replace(/\.md$/, ' [deleted].md');
 			try {
@@ -238,8 +402,6 @@ export class SyncManager {
 				console.warn(`IMA Sync: 标记删除重命名失败 / Mark-deleted rename failed: ${filePath}`, renameErr);
 				return;
 			}
-			// 在 frontmatter 中加上 sync_status: deleted
-			// Add sync_status: deleted to frontmatter
 			const renamedFile = this.vault.getFileByPath(newFilePath);
 			if (renamedFile instanceof TFile) {
 				const content = await this.vault.read(renamedFile);
@@ -248,7 +410,6 @@ export class SyncManager {
 			}
 			console.debug(`IMA Sync: 标记已删除条目 / Marked deleted item: ${newFilePath}`);
 		}
-		// 'keep' → 不做任何操作 / Do nothing
 	}
 
 	/**
@@ -263,7 +424,6 @@ export class SyncManager {
 		try {
 			const mediaInfo = await this.client!.getMediaInfo(item.media_id);
 
-			// ── 分支 A：笔记类型 ──
 			if (mediaInfo.media_type === 11 && mediaInfo.notebook_ext_info?.notebook_id) {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
 				const rawJson = await this.client!.getNoteContent(notebookId);
@@ -271,13 +431,11 @@ export class SyncManager {
 				return this.prependFrontmatterField(mdContent, 'media_id', item.media_id);
 			}
 
-			// ── 分支 B：url_info 中有可访问的 URL ──
 			if (mediaInfo.url_info?.url) {
 				const { url, headers } = mediaInfo.url_info;
 				return await this.syncByMediaType(item.media_type, url, headers, item.title, filePath, opts, item.media_id);
 			}
 
-			// ── 分支 C：无可访问内容，fallback 到占位符 ──
 			return this.buildPlaceholder(item);
 		} catch (err) {
 			console.warn(`IMA Sync: get_media_info 失败，使用占位符 / get_media_info failed, using placeholder: ${item.media_id}`, err);
@@ -441,7 +599,6 @@ export class SyncManager {
 	): Promise<string> {
 		const fm = `---\nmedia_id: "${mediaId}"\n---\n\n`;
 
-		// 不下载附件 → 保留原链接 / Skip download, keep original link
 		if (!opts.downloadAttachments) {
 			if (isImage) {
 				return `${fm}![${title}](${url})`;

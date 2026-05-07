@@ -52,6 +52,51 @@
 	width: 120px;
 }
 
+/* 知识库分组标题 / KB group header */
+.ima-kb-group-header {
+	font-weight: bold;
+	font-size: 0.9em;
+	color: var(--text-muted);
+	margin: 8px 0 4px 0;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+/* 订阅知识库 checkbox / Subscribed KB checkbox */
+.ima-kb-checkbox {
+	margin-right: 4px;
+}
+
+/* 已添加的公共知识库列表 / Added public KB list */
+.ima-pubkb-list {
+	margin-bottom: 12px;
+}
+
+/* 公共知识库行布局 / Public KB row layout */
+.ima-pubkb-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 0;
+}
+
+/* 公共知识库名称 / Public KB name */
+.ima-pubkb-name {
+	flex: 1;
+}
+
+/* 公共知识库同步时间 / Public KB sync time */
+.ima-pubkb-time {
+	color: var(--text-muted);
+	font-size: 0.85em;
+}
+
+/* 公共知识库删除按钮 / Public KB delete button */
+.ima-pubkb-del {
+	font-size: 0.8em;
+	padding: 2px 8px;
+}
+
 /* 通用隐藏类（用于功能性显隐切换）/ Generic hidden class (for functional visibility toggling) */
 .ima-hidden {
 	display: none;
