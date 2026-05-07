@@ -35,8 +35,9 @@ export class JsonToMarkdown {
 	 * @param jsonStr      IMA API 返回的 JSON 字符串 / JSON string from IMA API
 	 * @param noteFilePath 笔记在 vault 中的路径（用于解析附件位置）/ Note path in vault
 	 * @param opts         附件处理选项 / Attachment options
+	 * @param titleBase    笔记标题（用于图片命名）/ Note title (for image naming)
 	 */
-	async convert(jsonStr: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+	async convert(jsonStr: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string): Promise<string> {
 		let nodes: SlateNode[];
 		try {
 			nodes = JSON.parse(jsonStr) as SlateNode[];
@@ -49,9 +50,11 @@ export class JsonToMarkdown {
 
 		const parts: string[] = [];
 		let prevListGroup = '';
+		const imgIndex = { value: 1 };
+		const timestamp = Date.now();
 
 		for (const node of nodes) {
-			const rendered = await this.convertBlock(node, noteFilePath, opts);
+			const rendered = await this.convertBlock(node, noteFilePath, opts, titleBase, imgIndex, timestamp);
 			if (rendered === null) continue;
 
 			const isListItem = node.type === 'p' && node.listStyleType != null;
@@ -72,11 +75,11 @@ export class JsonToMarkdown {
 	}
 
 	/** 处理块级节点 / Process block-level node */
-	private async convertBlock(node: SlateNode, noteFilePath: string, opts: AttachmentOptions): Promise<string | null> {
+	private async convertBlock(node: SlateNode, noteFilePath: string, opts: AttachmentOptions, titleBase?: string, imgIndex?: { value: number }, timestamp?: number): Promise<string | null> {
 		const type = node.type;
 
 		if (type === 'p') {
-			const inline = await this.convertInline(node.children ?? [], noteFilePath, opts);
+			const inline = await this.convertInline(node.children ?? [], noteFilePath, opts, titleBase, imgIndex, timestamp);
 			// 跳过完全空白的段落 / Skip fully empty paragraphs
 			if (!inline.trim()) return null;
 
@@ -90,21 +93,21 @@ export class JsonToMarkdown {
 
 		if (type === 'cursor-side') {
 			// 通常包含图片 / Usually wraps an image
-			const inline = await this.convertInline(node.children ?? [], noteFilePath, opts);
+			const inline = await this.convertInline(node.children ?? [], noteFilePath, opts, titleBase, imgIndex, timestamp);
 			return inline.trim() || null;
 		}
 
 		if (type === 'cloud_image') {
-			return await this.handleImage(node, noteFilePath, opts);
+			return await this.handleImage(node, noteFilePath, opts, titleBase, imgIndex, timestamp);
 		}
 
 		if (type === 'table') {
-			return await this.convertTable(node, noteFilePath, opts);
+			return await this.convertTable(node, noteFilePath, opts, titleBase, imgIndex, timestamp);
 		}
 
 		// 未知块类型：尝试提取子节点文本 / Unknown block: try to extract children text
 		if (node.children) {
-			const inline = await this.convertInline(node.children, noteFilePath, opts);
+			const inline = await this.convertInline(node.children, noteFilePath, opts, titleBase, imgIndex, timestamp);
 			return inline.trim() || null;
 		}
 
@@ -112,16 +115,16 @@ export class JsonToMarkdown {
 	}
 
 	/** 处理行内子节点 / Process inline children */
-	private async convertInline(children: SlateNode[], noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+	private async convertInline(children: SlateNode[], noteFilePath: string, opts: AttachmentOptions, titleBase?: string, imgIndex?: { value: number }, timestamp?: number): Promise<string> {
 		const parts: string[] = [];
 
 		for (const child of children) {
 			if (typeof child.text === 'string') {
 				parts.push(this.formatText(child));
 			} else if (child.type === 'cloud_image') {
-				parts.push(await this.handleImage(child, noteFilePath, opts));
+				parts.push(await this.handleImage(child, noteFilePath, opts, titleBase, imgIndex, timestamp));
 			} else if (child.children) {
-				parts.push(await this.convertInline(child.children, noteFilePath, opts));
+				parts.push(await this.convertInline(child.children, noteFilePath, opts, titleBase, imgIndex, timestamp));
 			}
 		}
 
@@ -139,12 +142,12 @@ export class JsonToMarkdown {
 	}
 
 	/** 下载图片并返回格式化链接 / Download image and return formatted link */
-	private async handleImage(node: SlateNode, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+	private async handleImage(node: SlateNode, noteFilePath: string, opts: AttachmentOptions, titleBase?: string, imgIndex?: { value: number }, timestamp?: number): Promise<string> {
 		const url = node.url as string | undefined;
 		if (!url) return '';
 
 		try {
-			return await this.imageHandler.downloadAndLink(url, noteFilePath, opts);
+			return await this.imageHandler.downloadAndLink(url, noteFilePath, opts, titleBase, imgIndex, timestamp);
 		} catch {
 			console.warn(`IMA Sync: 图片下载失败，保留原始链接 / Image download failed, keeping original link: ${url}`);
 			return `![image](${url})`;
@@ -152,7 +155,7 @@ export class JsonToMarkdown {
 	}
 
 	/** 将表格节点转为 Markdown 表格 / Convert table node to Markdown table */
-	private async convertTable(node: SlateNode, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+	private async convertTable(node: SlateNode, noteFilePath: string, opts: AttachmentOptions, titleBase?: string, imgIndex?: { value: number }, timestamp?: number): Promise<string> {
 		const rows = (node.children ?? []).filter(c => c.type === 'tr');
 		if (rows.length === 0) return '';
 
@@ -165,7 +168,7 @@ export class JsonToMarkdown {
 				// 单元格内容是 p 节点数组 / Cell content is array of p nodes
 				const texts: string[] = [];
 				for (const p of (cell.children ?? [])) {
-					const t = await this.convertInline(p.children ?? [], noteFilePath, opts);
+					const t = await this.convertInline(p.children ?? [], noteFilePath, opts, titleBase, imgIndex, timestamp);
 					if (t.trim()) texts.push(t.trim());
 				}
 				// 管道符转义 / Escape pipe characters

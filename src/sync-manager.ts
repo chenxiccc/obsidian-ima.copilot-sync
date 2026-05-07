@@ -101,7 +101,7 @@ export class SyncManager {
 		await this.vault.adapter.rename(old, neu);
 	}
 
-	private buildAttachmentOptions(): AttachmentOptions {
+	private buildAttachmentOptions(kbName?: string): AttachmentOptions {
 		return {
 			pathMode: this.settings.attachmentPathMode,
 			subfolderName: this.settings.attachmentSubfolderName,
@@ -109,6 +109,7 @@ export class SyncManager {
 			syncFolder: normalizePath(this.settings.syncFolder),
 			downloadAttachments: this.settings.downloadAttachments,
 			attachmentSizeLimitBytes: this.calcSizeLimitBytes(),
+			kbName,
 		};
 	}
 
@@ -136,7 +137,7 @@ export class SyncManager {
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const rawJson = await this.client.getNoteContent(note.docid);
-					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts);
+					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts, filename);
 					await this.writeNote(filePath, processedContent, opts);
 					syncedCount++;
 				} catch (err) {
@@ -151,6 +152,7 @@ export class SyncManager {
 			if (!kbId) {
 				new Notice('IMA Sync: 请在设置中填写知识库 ID');
 			} else {
+				const kbOpts = this.buildAttachmentOptions('个人知识库');
 				const kbFolder = normalizePath(`${syncFolder}/知识库`);
 				await ensureFolder(this.vault, kbFolder);
 
@@ -176,7 +178,7 @@ export class SyncManager {
 						if (existingMap.has(item.media_id)) continue;
 						const filename = sanitizeFilename(item.title || item.media_id);
 						const filePath = normalizePath(`${kbFolder}/${filename}.md`);
-						const content = await this.syncKnowledgeItem(item, filePath, opts);
+						const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
 						if (content !== null) {
 							await this.writeNote(filePath, content, opts);
 							syncedCount++;
@@ -192,7 +194,7 @@ export class SyncManager {
 		if (this.settings.publicKnowledgeBases.length > 0) {
 			for (const pubKB of this.settings.publicKnowledgeBases) {
 				try {
-					const count = await this.syncPublicKnowledgeBase(pubKB, opts);
+					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions(pubKB.name || undefined));
 					syncedCount += count;
 				} catch (err) {
 					console.warn(`IMA Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
@@ -427,7 +429,7 @@ export class SyncManager {
 			if (mediaInfo.media_type === 11 && mediaInfo.notebook_ext_info?.notebook_id) {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
 				const rawJson = await this.client!.getNoteContent(notebookId);
-				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts);
+				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts, item.title);
 				return this.prependFrontmatterField(mdContent, 'media_id', item.media_id);
 			}
 
@@ -632,16 +634,22 @@ export class SyncManager {
 
 	/** 从 URL 推断下载文件名 / Infer download filename from URL */
 	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
+		const ext = this.extractExtFromUrl(url) || guessFileExtension(url);
+		const safeTitle = fallbackTitle
+			? fallbackTitle.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_')
+			: 'file';
+		return `${safeTitle}-${Date.now()}-1${ext}`;
+	}
+
+	/** 从 URL 路径提取扩展名 / Extract extension from URL path */
+	private extractExtFromUrl(url: string): string {
 		try {
 			const urlObj = new URL(url);
 			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
-			const decoded = decodeURIComponent(lastSegment);
-			if (decoded && decoded.includes('.')) {
-				return sanitizeFilename(decoded);
-			}
+			const dotIdx = lastSegment.lastIndexOf('.');
+			if (dotIdx > 0) return lastSegment.slice(dotIdx).toLowerCase();
 		} catch { /* ignore */ }
-		const ext = guessFileExtension(url);
-		return `${sanitizeFilename(fallbackTitle).slice(0, 80)}${ext}`;
+		return '';
 	}
 
 	/** 构建占位符内容 / Build placeholder content */
@@ -666,7 +674,7 @@ export class SyncManager {
 				const content = await this.vault.read(file);
 				if (!content.match(/!\[[^\]]*\]\(https?:\/\//)) continue;
 
-				const fixed = await this.imageHandler.processContent(content, file.path, opts);
+				const fixed = await this.imageHandler.processContent(content, file.path, opts, file.basename);
 				if (fixed !== content) {
 					await this.vault.modify(file, fixed);
 					console.debug(`IMA Sync: 修复图片链接 / Fixed image links in: ${file.path}`);

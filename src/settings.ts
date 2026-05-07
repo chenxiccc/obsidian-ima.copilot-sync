@@ -584,41 +584,41 @@ export class ImaSettingTab extends PluginSettingTab {
 					}),
 			);
 
+		// TODO: 后续优化附件路径模式 / TODO: optimize attachment path mode later
 		// ── 附件路径设置 / Attachment path settings ──────────────────────────
-
-		let subfolderInput: HTMLInputElement | null = null;
-
-		new Setting(containerEl)
-			.setName('附件保存位置')
-			.setDesc('图片等附件下载后保存的位置')
-			.addDropdown(drop => {
-				drop
-					.addOption('subfolder', '同步目录下子文件夹（可自定义名称）')
-					.addOption('obsidian', '跟随 Obsidian 附件设置')
-					.addOption('samename', '同步目录下与笔记同名的文件夹')
-					.setValue(this.plugin.settings.attachmentPathMode)
-					.onChange(async value => {
-						this.plugin.settings.attachmentPathMode = value as AttachmentPathMode;
-						await this.plugin.saveSettings();
-						if (subfolderInput) {
-							subfolderInput.toggleClass('ima-hidden', value !== 'subfolder');
-						}
-					});
-			})
-			.addText(text => {
-				text
-					.setPlaceholder('attachments')
-					.setValue(this.plugin.settings.attachmentSubfolderName)
-					.onChange(async value => {
-						this.plugin.settings.attachmentSubfolderName = value.trim() || 'attachments';
-						await this.plugin.saveSettings();
-					});
-				subfolderInput = text.inputEl;
-				subfolderInput.addClass('ima-subfolder-input');
-				if (this.plugin.settings.attachmentPathMode !== 'subfolder') {
-					subfolderInput.addClass('ima-hidden');
-				}
-			});
+		// let subfolderInput: HTMLInputElement | null = null;
+		//
+		// new Setting(containerEl)
+		// 	.setName('附件保存位置')
+		// 	.setDesc('图片等附件下载后保存的位置')
+		// 	.addDropdown(drop => {
+		// 		drop
+		// 			.addOption('subfolder', '同步目录下子文件夹（可自定义名称）')
+		// 			.addOption('obsidian', '跟随 Obsidian 附件设置')
+		// 			.addOption('samename', '同步目录下与笔记同名的文件夹')
+		// 			.setValue(this.plugin.settings.attachmentPathMode)
+		// 			.onChange(async value => {
+		// 				this.plugin.settings.attachmentPathMode = value as AttachmentPathMode;
+		// 				await this.plugin.saveSettings();
+		// 				if (subfolderInput) {
+		// 					subfolderInput.toggleClass('ima-hidden', value !== 'subfolder');
+		// 				}
+		// 			});
+		// 	})
+		// 	.addText(text => {
+		// 		text
+		// 			.setPlaceholder('attachments')
+		// 			.setValue(this.plugin.settings.attachmentSubfolderName)
+		// 			.onChange(async value => {
+		// 				this.plugin.settings.attachmentSubfolderName = value.trim() || 'attachments';
+		// 				await this.plugin.saveSettings();
+		// 			});
+		// 		subfolderInput = text.inputEl;
+		// 		subfolderInput.addClass('ima-subfolder-input');
+		// 		if (this.plugin.settings.attachmentPathMode !== 'subfolder') {
+		// 			subfolderInput.addClass('ima-hidden');
+		// 		}
+		// 	});
 
 		// ── 图片链接格式 / Image link format ─────────────────────────────────
 

@@ -30,6 +30,8 @@ export interface AttachmentOptions {
 	downloadAttachments: boolean;
 	/** 附件大小上限字节数（0 = 不限制）/ Attachment size limit in bytes (0 = no limit) */
 	attachmentSizeLimitBytes: number;
+	/** 知识库名称（用于附件子目录）/ KB name (for attachment subdirectory) */
+	kbName?: string;
 }
 
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────
@@ -49,7 +51,7 @@ export class ImageHandler {
 	 * 处理笔记内容：下载所有外链图片，保存到附件文件夹，替换链接
 	 * Process note content: download all external images, save to attachment folder, replace links
 	 */
-	async processContent(content: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+	async processContent(content: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string): Promise<string> {
 		if (!opts.downloadAttachments) return content;
 
 		const matches: Array<{ full: string; alt: string; url: string }> = [];
@@ -69,6 +71,9 @@ export class ImageHandler {
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await ensureFolder(this.vault, attachmentFolder);
 
+		const ts = Date.now();
+		let imgIndex = 1;
+
 		for (let i = 0; i < matches.length; i++) {
 			const { full, alt, url } = matches[i] ?? { full: '', alt: '', url: '' };
 			if (!url) continue;
@@ -82,7 +87,8 @@ export class ImageHandler {
 					}
 				}
 
-				const filename = this.urlToFilename(url, i);
+				const filename = this.urlToFilename(url, titleBase, ts, imgIndex);
+				imgIndex++;
 				const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
 				const exists = await this.vault.adapter.exists(destPath);
@@ -134,13 +140,16 @@ export class ImageHandler {
 	 * 下载单张图片，保存到附件文件夹，返回格式化链接
 	 * Download a single image, save to attachment folder, return formatted link
 	 */
-	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions): Promise<string> {
+	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string, imgIndex?: { value: number }, timestamp?: number): Promise<string> {
 		if (!opts.downloadAttachments) return `![image](${url})`;
 
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await ensureFolder(this.vault, attachmentFolder);
 
-		const filename = this.urlToFilename(url, 0);
+		const ts = timestamp ?? Date.now();
+		const idx = imgIndex?.value ?? 1;
+		const filename = this.urlToFilename(url, titleBase, ts, idx);
+		if (imgIndex) imgIndex.value++;
 		const destPath = normalizePath(`${attachmentFolder}/${filename}`);
 
 		const exists = await this.vault.adapter.exists(destPath);
@@ -171,33 +180,24 @@ export class ImageHandler {
 		return `![${alt}](${encoded})`;
 	}
 
-	/** 从 URL 生成合法文件名 / Generate valid filename from URL */
-	private urlToFilename(url: string, index: number): string {
+	/** 从 URL 生成合法文件名：titleBase-timestamp-N.ext / Generate valid filename from URL: titleBase-timestamp-N.ext */
+	private urlToFilename(url: string, titleBase: string | undefined, timestamp: number, index: number): string {
+		const ext = this.extractExtFromUrl(url) || guessFileExtension(url) || '.png';
+		const safeTitle = titleBase
+			? titleBase.replace(/\s+/g, '-').replace(/[\\/:*?"<>|]/g, '_')
+			: 'img';
+		return `${safeTitle}-${timestamp}-${index}${ext}`;
+	}
+
+	/** 从 URL 路径提取扩展名 / Extract extension from URL path */
+	private extractExtFromUrl(url: string): string {
 		try {
 			const urlObj = new URL(url);
 			const lastSegment = urlObj.pathname.split('/').pop() ?? '';
-			const cleanSegment = lastSegment.split('?')[0] ?? '';
-
-			if (cleanSegment && cleanSegment.includes('.')) {
-				return sanitizeFilename(cleanSegment);
-			}
-
-			const ext = guessFileExtension(url) || '.png';
-			return `img_${this.hashUrl(url)}${ext}`;
-		} catch {
-			return `img_${index}.png`;
-		}
-	}
-
-	/** 简单哈希函数用于生成唯一文件名 / Simple hash for unique filename */
-	private hashUrl(url: string): string {
-		let hash = 0;
-		for (let i = 0; i < url.length; i++) {
-			const char = url.charCodeAt(i);
-			hash = (hash << 5) - hash + char;
-			hash = hash & hash;
-		}
-		return Math.abs(hash).toString(16);
+			const dotIdx = lastSegment.lastIndexOf('.');
+			if (dotIdx > 0) return lastSegment.slice(dotIdx).toLowerCase();
+		} catch { /* ignore */ }
+		return '';
 	}
 
 	/** 下载图片并写入 vault / Download image and write to vault */

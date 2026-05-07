@@ -35,31 +35,15 @@ export function extractNoteBasename(noteFilePath: string): string {
 }
 
 /**
- * 根据模式解析附件文件夹的实际路径
- * Resolve the actual attachment folder path based on mode
+ * 解析附件文件夹路径：统一为 syncFolder/attachments/[kbName]
+ * Resolve attachment folder path: unified as syncFolder/attachments/[kbName]
  */
-export function resolveAttachmentFolder(vault: Vault, noteFilePath: string, opts: AttachmentOptions): string {
-	const noteDir = extractNoteDir(noteFilePath);
-	const noteBasename = extractNoteBasename(noteFilePath);
-
-	switch (opts.pathMode) {
-		case 'subfolder':
-			return normalizePath(`${opts.syncFolder}/${opts.subfolderName || 'attachments'}`);
-		case 'obsidian': {
-			const setting: string =
-				(vault as unknown as { getConfig(k: string): string }).getConfig('attachmentFolderPath')
-				?? 'attachments';
-			if (!setting || setting === '/') return normalizePath('/');
-			if (setting.startsWith('./')) {
-				return normalizePath(`${noteDir}/${setting.slice(2)}`);
-			}
-			return normalizePath(setting);
-		}
-		case 'samename':
-			return normalizePath(`${opts.syncFolder}/${noteBasename}`);
-		default:
-			return normalizePath(`${opts.syncFolder}/attachments`);
+export function resolveAttachmentFolder(_vault: Vault, _noteFilePath: string, opts: AttachmentOptions): string {
+	const base = normalizePath(`${opts.syncFolder}/attachments`);
+	if (opts.kbName) {
+		return normalizePath(`${base}/${sanitizeFilename(opts.kbName)}`);
 	}
+	return base;
 }
 
 /**
