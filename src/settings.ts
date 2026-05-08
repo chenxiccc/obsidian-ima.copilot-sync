@@ -145,7 +145,8 @@ class ConfirmModal extends Modal {
 			// 直接关窗，不做任何操作 / Dismissed without choosing — revert to previous state
 			this.onDismiss?.();
 		}
-	}
+
+}
 }
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
@@ -654,103 +655,27 @@ export class ImaSettingTab extends PluginSettingTab {
 					});
 			});
 
-			// ── 附件下载设置 / Attachment download settings ──────────────────────
+		// ── 附件下载设置 / Attachment download settings ──────────────────────
 
-			// 下载图片行 / Download images row
-			let imageSizeLimitContainer: HTMLDivElement | null = null;
+		this.addDownloadToggleWithSizeLimit(containerEl, {
+			toggleName: '下载图片',
+			toggleDesc: '将图片下载到本地（关闭则保留原始链接）',
+			limitName: '图片大小限制',
+			limitDesc: '超过限制的图片保留原始链接，不下载（0 = 不限制）',
+			toggleKey: 'downloadImages',
+			limitKey: 'imageSizeLimit',
+			unitKey: 'imageSizeLimitUnit',
+		});
 
-			new Setting(containerEl)
-				.setName('下载图片')
-				.setDesc('将图片下载到本地（关闭则保留原始链接）')
-				.addToggle(toggle =>
-					toggle
-						.setValue(this.plugin.settings.downloadImages)
-						.onChange(async value => {
-							this.plugin.settings.downloadImages = value;
-							await this.plugin.saveSettings();
-							if (imageSizeLimitContainer) {
-								imageSizeLimitContainer.toggleClass('ima-hidden', !value);
-							}
-						}),
-				);
-
-			imageSizeLimitContainer = containerEl.createDiv();
-			if (!this.plugin.settings.downloadImages) {
-				imageSizeLimitContainer.addClass('ima-hidden');
-			}
-
-			new Setting(imageSizeLimitContainer)
-				.setName('图片大小限制')
-				.setDesc('超过限制的图片保留原始链接，不下载（0 = 不限制）')
-				.addText(text =>
-					text
-						.setPlaceholder('0')
-						.setValue(String(this.plugin.settings.imageSizeLimit))
-						.onChange(async value => {
-							const num = parseFloat(value);
-							this.plugin.settings.imageSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
-							await this.plugin.saveSettings();
-						}),
-				)
-				.addDropdown(drop =>
-					drop
-						.addOption('KB', 'KB')
-						.addOption('MB', 'MB')
-						.addOption('GB', 'GB')
-						.setValue(this.plugin.settings.imageSizeLimitUnit)
-						.onChange(async value => {
-							this.plugin.settings.imageSizeLimitUnit = value as AttachmentSizeUnit;
-							await this.plugin.saveSettings();
-						}),
-				);
-
-			// 下载文件行 / Download files row
-			let fileSizeLimitContainer: HTMLDivElement | null = null;
-
-			new Setting(containerEl)
-				.setName('下载文件')
-				.setDesc('将 docx、PDF 等文件下载到本地（关闭则保留原始链接）')
-				.addToggle(toggle =>
-					toggle
-						.setValue(this.plugin.settings.downloadFiles)
-						.onChange(async value => {
-							this.plugin.settings.downloadFiles = value;
-							await this.plugin.saveSettings();
-							if (fileSizeLimitContainer) {
-								fileSizeLimitContainer.toggleClass('ima-hidden', !value);
-							}
-						}),
-				);
-
-			fileSizeLimitContainer = containerEl.createDiv();
-			if (!this.plugin.settings.downloadFiles) {
-				fileSizeLimitContainer.addClass('ima-hidden');
-			}
-
-			new Setting(fileSizeLimitContainer)
-				.setName('文件大小限制')
-				.setDesc('超过限制的文件保留原始链接，不下载（0 = 不限制）')
-				.addText(text =>
-					text
-						.setPlaceholder('0')
-						.setValue(String(this.plugin.settings.fileSizeLimit))
-						.onChange(async value => {
-							const num = parseFloat(value);
-							this.plugin.settings.fileSizeLimit = isNaN(num) ? 0 : Math.max(0, num);
-							await this.plugin.saveSettings();
-						}),
-				)
-				.addDropdown(drop =>
-					drop
-						.addOption('KB', 'KB')
-						.addOption('MB', 'MB')
-						.addOption('GB', 'GB')
-						.setValue(this.plugin.settings.fileSizeLimitUnit)
-						.onChange(async value => {
-							this.plugin.settings.fileSizeLimitUnit = value as AttachmentSizeUnit;
-							await this.plugin.saveSettings();
-						}),
-				);
+		this.addDownloadToggleWithSizeLimit(containerEl, {
+			toggleName: '下载文件',
+			toggleDesc: '将 docx、PDF 等文件下载到本地（关闭则保留原始链接）',
+			limitName: '文件大小限制',
+			limitDesc: '超过限制的文件保留原始链接，不下载（0 = 不限制）',
+			toggleKey: 'downloadFiles',
+			limitKey: 'fileSizeLimit',
+			unitKey: 'fileSizeLimitUnit',
+		});
 
 		// ── 同步设置 / Sync settings ─────────────────────────────────────────
 
@@ -855,5 +780,64 @@ export class ImaSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+	}
+	private addDownloadToggleWithSizeLimit(
+		containerEl: HTMLElement,
+		config: {
+			toggleName: string;
+			toggleDesc: string;
+			limitName: string;
+			limitDesc: string;
+			toggleKey: 'downloadImages' | 'downloadFiles';
+			limitKey: 'imageSizeLimit' | 'fileSizeLimit';
+			unitKey: 'imageSizeLimitUnit' | 'fileSizeLimitUnit';
+		},
+	): void {
+		let limitContainer: HTMLDivElement | null = null;
+
+		new Setting(containerEl)
+			.setName(config.toggleName)
+			.setDesc(config.toggleDesc)
+			.addToggle(toggle =>
+				toggle
+					.setValue(this.plugin.settings[config.toggleKey])
+					.onChange(async value => {
+						this.plugin.settings[config.toggleKey] = value;
+						await this.plugin.saveSettings();
+						if (limitContainer) {
+							limitContainer.toggleClass('ima-hidden', !value);
+						}
+					}),
+		);
+
+		limitContainer = containerEl.createDiv();
+		if (!this.plugin.settings[config.toggleKey]) {
+			limitContainer.addClass('ima-hidden');
+		}
+
+		new Setting(limitContainer)
+			.setName(config.limitName)
+			.setDesc(config.limitDesc)
+			.addText(text =>
+				text
+					.setPlaceholder('0')
+					.setValue(String(this.plugin.settings[config.limitKey]))
+					.onChange(async value => {
+						const num = parseFloat(value);
+						this.plugin.settings[config.limitKey] = isNaN(num) ? 0 : Math.max(0, num);
+						await this.plugin.saveSettings();
+					}),
+			)
+			.addDropdown(drop =>
+				drop
+					.addOption('KB', 'KB')
+					.addOption('MB', 'MB')
+					.addOption('GB', 'GB')
+					.setValue(this.plugin.settings[config.unitKey])
+					.onChange(async value => {
+						this.plugin.settings[config.unitKey] = value as AttachmentSizeUnit;
+						await this.plugin.saveSettings();
+					}),
+		);
 	}
 }

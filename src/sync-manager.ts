@@ -32,8 +32,8 @@ export class SyncManager {
 		private readonly saveSettings: () => Promise<void>,
 		private readonly resolveCredentials: () => { clientId: string | null; apiKey: string | null },
 	) {
-		this.imageHandler = new ImageHandler(vault);
 		this.fileDownloader = new FileDownloader(vault);
+		this.imageHandler = new ImageHandler(vault, this.fileDownloader);
 	}
 
 	rebuildClient(): void {
@@ -713,7 +713,7 @@ export class SyncManager {
 	): Promise<string> {
 		const fm = `---\nmedia_id: "${mediaId}"\n---\n\n`;
 
-		if (!opts.downloadFiles) {
+		if (isImage ? !opts.downloadImages : !opts.downloadFiles) {
 			if (isImage) {
 				return `${fm}![${title}](${url})`;
 			}

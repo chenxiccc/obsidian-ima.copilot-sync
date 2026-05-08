@@ -14,6 +14,7 @@ import {
 	extractExtFromUrl,
 	guessFileExtension,
 	isDownloadableFileUrl,
+	DOWNLOADABLE_FILE_EXTENSIONS,
 } from './path-utils';
 
 // 匹配 Markdown 图片语法：![alt](https://...) / Match Markdown image syntax
@@ -176,19 +177,9 @@ export class ImageHandler {
 			const { full, text, url } = matches[i] ?? { full: '', text: '', url: '' };
 			if (!url) continue;
 
-			// 仅处理可下载文件类型，跳过普通超链接 / Only process downloadable file types, skip regular hyperlinks
 			if (!isDownloadableFileUrl(url)) continue;
 
 			try {
-				if (opts.fileSizeLimitBytes > 0) {
-					const exceeded = await exceedsSizeLimit(url, opts.fileSizeLimitBytes);
-					if (exceeded) {
-						console.debug(`IMA Sync: 文件超过大小限制，保留原链接 / File exceeds size limit, keeping link: ${url}`);
-						continue;
-					}
-				}
-
-				// 文件名：优先用链接文本，回退到 URL 推断 / Filename: prefer link text, fallback to URL-based
 				const filename = this.deriveFileFilename(text, url, naming);
 				naming.imgIndex.value++;
 
@@ -256,7 +247,7 @@ export class ImageHandler {
 			const raw = (m[1] ?? '').trim();
 			if (!raw) continue;
 			const ext = raw.substring(raw.lastIndexOf('.')).toLowerCase();
-			if (ext && isDownloadableFileUrl(`https://example.com/${raw}`)) {
+			if (ext && DOWNLOADABLE_FILE_EXTENSIONS.has(ext)) {
 				paths.push(normalizePath(`${folder}/${raw}`));
 			}
 		}
@@ -270,7 +261,7 @@ export class ImageHandler {
 			if (!encoded) continue;
 			const decoded = encoded.split('/').map(seg => decodeURIComponent(seg)).join('/');
 			const ext = decoded.substring(decoded.lastIndexOf('.')).toLowerCase();
-			if (ext && isDownloadableFileUrl(`https://example.com/${decoded}`)) {
+			if (ext && DOWNLOADABLE_FILE_EXTENSIONS.has(ext)) {
 				paths.push(normalizePath(noteDir ? `${noteDir}/${decoded}` : decoded));
 			}
 		}
@@ -333,14 +324,9 @@ export class ImageHandler {
 	 * Derive filename for file attachment from link text or URL
 	 */
 	private deriveFileFilename(linkText: string, url: string, naming: ImageNamingContext): string {
-		// 链接文本含已知文件扩展名时直接使用 / Use link text directly if it has a known file extension
-		if (linkText) {
-			const textExt = linkText.substring(linkText.lastIndexOf('.')).toLowerCase();
-			if (textExt && (extractExtFromUrl(`https://example.com/${linkText}`) || guessFileExtension(linkText))) {
-				return sanitizeFilename(linkText);
-			}
+		if (linkText && (extractExtFromUrl(`https://example.com/${linkText}`) || guessFileExtension(linkText))) {
+			return sanitizeFilename(linkText);
 		}
-		// 回退到 URL 推断 / Fallback to URL-based naming
 		return this.urlToFilename(url, naming);
 	}
 
