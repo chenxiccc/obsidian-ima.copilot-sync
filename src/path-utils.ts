@@ -146,3 +146,17 @@ export function guessFileExtension(url: string): string {
 	if (lower.includes('.webp')) return '.webp';
 	return '';
 }
+
+// ─── 可下载文件判断 / Downloadable file detection ────────────────────────────
+
+/** 可下载的非图片文件扩展名 / Downloadable non-image file extensions */
+export const DOWNLOADABLE_FILE_EXTENSIONS = new Set([
+	'.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx',
+	'.txt', '.xmind', '.md',
+]);
+
+/** 判断 URL 是否指向可下载的非图片文件 / Check if URL points to a downloadable non-image file */
+export function isDownloadableFileUrl(url: string): boolean {
+	const ext = extractExtFromUrl(url) || guessFileExtension(url);
+	return ext !== '' && DOWNLOADABLE_FILE_EXTENSIONS.has(ext);
+}

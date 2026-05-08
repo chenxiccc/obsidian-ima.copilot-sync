@@ -54,8 +54,8 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: npm run build
 
-      # 创建 Release 并上传 main.js 和 manifest.json
-      # Create Release and upload main.js and manifest.json
+      # 创建 Release 并上传 main.js、manifest.json 和 styles.css
+      # Create Release and upload main.js, manifest.json, and styles.css
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
@@ -66,5 +66,6 @@ jobs:
           files: |
             main.js
             manifest.json
+            styles.css
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

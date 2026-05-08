@@ -107,18 +107,19 @@ export class SyncManager {
 		return {
 			linkFormat: this.settings.linkFormat,
 			syncFolder: normalizePath(this.settings.syncFolder),
-			downloadAttachments: this.settings.downloadAttachments,
-			attachmentSizeLimitBytes: this.calcSizeLimitBytes(),
+			downloadImages: this.settings.downloadImages,
+			imageSizeLimitBytes: this.calcSizeLimitBytes(this.settings.imageSizeLimit, this.settings.imageSizeLimitUnit),
+			downloadFiles: this.settings.downloadFiles,
+			fileSizeLimitBytes: this.calcSizeLimitBytes(this.settings.fileSizeLimit, this.settings.fileSizeLimitUnit),
 			kbName,
 			kbCategory,
 		};
 	}
 
-	private calcSizeLimitBytes(): number {
-		const { attachmentSizeLimit, attachmentSizeLimitUnit } = this.settings;
-		if (attachmentSizeLimit <= 0) return 0;
+	private calcSizeLimitBytes(limit: number, unit: string): number {
+		if (limit <= 0) return 0;
 		const multipliers: Record<string, number> = { KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
-		return Math.round(attachmentSizeLimit * (multipliers[attachmentSizeLimitUnit] ?? 1));
+		return Math.round(limit * (multipliers[unit] ?? 1));
 	}
 
 	/** 核心同步逻辑 / Core sync logic */
@@ -712,7 +713,7 @@ export class SyncManager {
 	): Promise<string> {
 		const fm = `---\nmedia_id: "${mediaId}"\n---\n\n`;
 
-		if (!opts.downloadAttachments) {
+		if (!opts.downloadFiles) {
 			if (isImage) {
 				return `${fm}![${title}](${url})`;
 			}
@@ -761,7 +762,7 @@ export class SyncManager {
 	 * Scan all .md files in sync folder, download leftover external image links
 	 */
 	private async fixPendingImages(syncFolder: string, opts: AttachmentOptions): Promise<void> {
-		if (!opts.downloadAttachments) return;
+		if (!opts.downloadImages && !opts.downloadFiles) return;
 
 		const mdFiles = this.vault.getFiles().filter(f =>
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/'),
@@ -837,10 +838,14 @@ export class SyncManager {
 
 			if (oldContent === content) return;
 
-			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
+			const oldImagePaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
+			const oldFilePaths = this.imageHandler.extractLocalFilePaths(oldContent, filePath, opts);
+			const oldPaths = [...oldImagePaths, ...oldFilePaths];
 			await this.vault.modify(existing, content);
 
-			const newPaths = new Set(this.imageHandler.extractLocalImagePaths(content, filePath, opts));
+			const newImagePaths = this.imageHandler.extractLocalImagePaths(content, filePath, opts);
+			const newFilePaths = this.imageHandler.extractLocalFilePaths(content, filePath, opts);
+			const newPaths = new Set([...newImagePaths, ...newFilePaths]);
 			const orphans = oldPaths.filter(p => !newPaths.has(p));
 			if (orphans.length > 0) {
 				await this.cleanOrphanImages(orphans, filePath);

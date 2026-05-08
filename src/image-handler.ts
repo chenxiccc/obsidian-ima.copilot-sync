@@ -1,5 +1,6 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { LinkFormat } from './settings';
+import type { FileDownloader } from './file-downloader';
 import {
 	CHROME_UA,
 	sanitizeFilename,
@@ -12,10 +13,13 @@ import {
 	resolveLinkFormat,
 	extractExtFromUrl,
 	guessFileExtension,
+	isDownloadableFileUrl,
 } from './path-utils';
 
 // 匹配 Markdown 图片语法：![alt](https://...) / Match Markdown image syntax
 const IMG_URL_REGEX = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+// 匹配 Markdown 普通链接语法：[text](https://...) / Match Markdown plain link syntax
+const FILE_URL_REGEX = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 
 // ─── 图片命名上下文 / Image naming context ───────────────────────────────────
 
@@ -41,10 +45,14 @@ export interface AttachmentOptions {
 	linkFormat: LinkFormat;
 	/** 同步根目录（用于 subfolder/samename 模式）/ Sync root dir (for subfolder/samename modes) */
 	syncFolder: string;
-	/** 是否下载附件 / Whether to download attachments */
-	downloadAttachments: boolean;
-	/** 附件大小上限字节数（0 = 不限制）/ Attachment size limit in bytes (0 = no limit) */
-	attachmentSizeLimitBytes: number;
+	/** 是否下载图片 / Whether to download images */
+	downloadImages: boolean;
+	/** 图片大小上限字节数（0 = 不限制）/ Image size limit in bytes (0 = no limit) */
+	imageSizeLimitBytes: number;
+	/** 是否下载文件 / Whether to download files */
+	downloadFiles: boolean;
+	/** 文件大小上限字节数（0 = 不限制）/ File size limit in bytes (0 = no limit) */
+	fileSizeLimitBytes: number;
 	/** 知识库名称（用于附件子目录）/ KB name (for attachment subdirectory) */
 	kbName?: string;
 	/** 知识库分类（个人知识库/共享知识库/订阅和公共知识库）/ KB category */
@@ -54,7 +62,10 @@ export interface AttachmentOptions {
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────
 
 export class ImageHandler {
-	constructor(private readonly vault: Vault) {}
+	constructor(
+		private readonly vault: Vault,
+		private readonly fileDownloader?: FileDownloader,
+	) {}
 
 	/**
 	 * 根据模式解析附件文件夹的实际路径
@@ -65,12 +76,30 @@ export class ImageHandler {
 	}
 
 	/**
-	 * 处理笔记内容：下载所有外链图片，保存到附件文件夹，替换链接
-	 * Process note content: download all external images, save to attachment folder, replace links
+	 * 处理笔记内容：下载所有外链图片和文件附件，保存到附件文件夹，替换链接
+	 * Process note content: download all external images and file attachments, save to attachment folder, replace links
 	 */
 	async processContent(content: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string): Promise<string> {
-		if (!opts.downloadAttachments) return content;
+		if (!opts.downloadImages && !opts.downloadFiles) return content;
 
+		// ── 第一遍：处理图片 / First pass: process images ──
+		if (opts.downloadImages) {
+			content = await this.processImages(content, noteFilePath, opts, titleBase);
+		}
+
+		// ── 第二遍：处理文件链接 / Second pass: process file links ──
+		if (opts.downloadFiles && this.fileDownloader) {
+			content = await this.processFileLinks(content, noteFilePath, opts, titleBase);
+		}
+
+		return content;
+	}
+
+	/**
+	 * 处理外链图片：下载到附件文件夹，替换为本地链接
+	 * Process external images: download to attachment folder, replace with local links
+	 */
+	private async processImages(content: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string): Promise<string> {
 		const matches: Array<{ full: string; alt: string; url: string }> = [];
 		let match: RegExpExecArray | null;
 		const regex = new RegExp(IMG_URL_REGEX.source, 'g');
@@ -88,15 +117,15 @@ export class ImageHandler {
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await ensureFolder(this.vault, attachmentFolder);
 
-			const naming = createNamingContext(titleBase);
+		const naming = createNamingContext(titleBase);
 
 		for (let i = 0; i < matches.length; i++) {
 			const { full, alt, url } = matches[i] ?? { full: '', alt: '', url: '' };
 			if (!url) continue;
 
 			try {
-				if (opts.attachmentSizeLimitBytes > 0) {
-					const exceeded = await exceedsSizeLimit(url, opts.attachmentSizeLimitBytes);
+				if (opts.imageSizeLimitBytes > 0) {
+					const exceeded = await exceedsSizeLimit(url, opts.imageSizeLimitBytes);
 					if (exceeded) {
 						console.debug(`IMA Sync: 图片超过大小限制，保留原链接 / Image exceeds size limit, keeping link: ${url}`);
 						continue;
@@ -116,6 +145,66 @@ export class ImageHandler {
 				content = content.replace(full, link);
 			} catch {
 				console.warn(`IMA Sync: 图片下载失败，跳过 / Image download failed, skipping: ${url}`);
+			}
+		}
+
+		return content;
+	}
+
+	/**
+	 * 处理外链文件附件：下载到附件文件夹，替换为本地链接
+	 * Process external file links: download to attachment folder, replace with local links
+	 */
+	private async processFileLinks(content: string, noteFilePath: string, opts: AttachmentOptions, titleBase?: string): Promise<string> {
+		const matches: Array<{ full: string; text: string; url: string }> = [];
+		let match: RegExpExecArray | null;
+		const regex = new RegExp(FILE_URL_REGEX.source, 'g');
+
+		while ((match = regex.exec(content)) !== null) {
+			matches.push({
+				full: match[0] ?? '',
+				text: match[1] ?? '',
+				url: match[2] ?? '',
+			});
+		}
+
+		if (matches.length === 0) return content;
+
+		const naming = createNamingContext(titleBase);
+
+		for (let i = 0; i < matches.length; i++) {
+			const { full, text, url } = matches[i] ?? { full: '', text: '', url: '' };
+			if (!url) continue;
+
+			// 仅处理可下载文件类型，跳过普通超链接 / Only process downloadable file types, skip regular hyperlinks
+			if (!isDownloadableFileUrl(url)) continue;
+
+			try {
+				if (opts.fileSizeLimitBytes > 0) {
+					const exceeded = await exceedsSizeLimit(url, opts.fileSizeLimitBytes);
+					if (exceeded) {
+						console.debug(`IMA Sync: 文件超过大小限制，保留原链接 / File exceeds size limit, keeping link: ${url}`);
+						continue;
+					}
+				}
+
+				// 文件名：优先用链接文本，回退到 URL 推断 / Filename: prefer link text, fallback to URL-based
+				const filename = this.deriveFileFilename(text, url, naming);
+				naming.imgIndex.value++;
+
+				const result = await this.fileDownloader!.downloadFile({
+					url,
+					filename,
+					noteFilePath,
+					opts,
+					isImage: false,
+				});
+
+				if (result.linkText) {
+					content = content.replace(full, result.linkText);
+				}
+			} catch {
+				console.warn(`IMA Sync: 文件下载失败，跳过 / File download failed, skipping: ${url}`);
 			}
 		}
 
@@ -153,11 +242,48 @@ export class ImageHandler {
 	}
 
 	/**
+	 * 解析 Markdown 内容中所有本地文件附件的 vault 路径
+	 * Parse all local file attachment vault paths from Markdown content
+	 */
+	extractLocalFilePaths(content: string, noteFilePath: string, opts: AttachmentOptions): string[] {
+		const paths: string[] = [];
+		const folder = this.resolveAttachmentFolder(noteFilePath, opts);
+
+		// 解析 wikilink 格式：[[file.docx]]（非嵌入）/ Parse wikilink format: [[file.docx]] (non-embed)
+		const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+		let m: RegExpExecArray | null;
+		while ((m = wikilinkRegex.exec(content)) !== null) {
+			const raw = (m[1] ?? '').trim();
+			if (!raw) continue;
+			const ext = raw.substring(raw.lastIndexOf('.')).toLowerCase();
+			if (ext && isDownloadableFileUrl(`https://example.com/${raw}`)) {
+				paths.push(normalizePath(`${folder}/${raw}`));
+			}
+		}
+
+		// 解析 Markdown 格式本地链接：[text](path)，跳过外链
+		// Parse Markdown format local links: [text](path), skip external links
+		const noteDir = extractNoteDir(noteFilePath);
+		const mdLocalRegex = /\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g;
+		while ((m = mdLocalRegex.exec(content)) !== null) {
+			const encoded = (m[1] ?? '').trim();
+			if (!encoded) continue;
+			const decoded = encoded.split('/').map(seg => decodeURIComponent(seg)).join('/');
+			const ext = decoded.substring(decoded.lastIndexOf('.')).toLowerCase();
+			if (ext && isDownloadableFileUrl(`https://example.com/${decoded}`)) {
+				paths.push(normalizePath(noteDir ? `${noteDir}/${decoded}` : decoded));
+			}
+		}
+
+		return paths;
+	}
+
+	/**
 	 * 下载单张图片，保存到附件文件夹，返回格式化链接
 	 * Download a single image, save to attachment folder, return formatted link
 	 */
 	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions, naming?: ImageNamingContext): Promise<string> {
-		if (!opts.downloadAttachments) return `![image](${url})`;
+		if (!opts.downloadImages) return `![image](${url})`;
 
 		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
 		await ensureFolder(this.vault, attachmentFolder);
@@ -200,6 +326,22 @@ export class ImageHandler {
 		const ext = extractExtFromUrl(url) || guessFileExtension(url) || '.png';
 		const safeTitle = sanitizeTitle(naming.titleBase, 'img');
 		return `${safeTitle}-${naming.timestamp}-${naming.imgIndex.value}${ext}`;
+	}
+
+	/**
+	 * 从链接文本或 URL 推断文件附件文件名
+	 * Derive filename for file attachment from link text or URL
+	 */
+	private deriveFileFilename(linkText: string, url: string, naming: ImageNamingContext): string {
+		// 链接文本含已知文件扩展名时直接使用 / Use link text directly if it has a known file extension
+		if (linkText) {
+			const textExt = linkText.substring(linkText.lastIndexOf('.')).toLowerCase();
+			if (textExt && (extractExtFromUrl(`https://example.com/${linkText}`) || guessFileExtension(linkText))) {
+				return sanitizeFilename(linkText);
+			}
+		}
+		// 回退到 URL 推断 / Fallback to URL-based naming
+		return this.urlToFilename(url, naming);
 	}
 
 	/** 下载图片并写入 vault / Download image and write to vault */

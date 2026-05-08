@@ -45,8 +45,9 @@ export class FileDownloader {
 		const { url, headers, filename, noteFilePath, opts, isImage = false } = params;
 
 		// 大小限制检查 / Size limit check
-		if (opts.attachmentSizeLimitBytes > 0) {
-			const exceeded = await exceedsSizeLimit(url, opts.attachmentSizeLimitBytes, headers);
+		const sizeLimitBytes = isImage ? opts.imageSizeLimitBytes : opts.fileSizeLimitBytes;
+		if (sizeLimitBytes > 0) {
+			const exceeded = await exceedsSizeLimit(url, sizeLimitBytes, headers);
 			if (exceeded) {
 				console.debug(`IMA Sync: 附件超过大小限制，保留原链接 / Attachment exceeds size limit, keeping link: ${url}`);
 				const linkText = isImage ? `![${filename}](${url})` : `[${filename}](${url})`;
