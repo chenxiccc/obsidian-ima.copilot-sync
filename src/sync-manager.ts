@@ -160,9 +160,9 @@ export class SyncManager {
 					if (existingMap.has(note.docid) && note.modify_time * 1000 <= this.settings.lastSyncTime) continue;
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
-					const rawJson = await this.client.getNoteContent(note.docid);
-					const processedContent = await this.jsonToMd.convert(rawJson, filePath, opts, filename);
-					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${processedContent}`;
+					const processedContent = await this.client.getNoteContentMarkdown(note.docid);
+					const withImages = await this.imageHandler.processContent(processedContent, filePath, opts, filename);
+					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${withImages}`;
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
 				} catch (err) {
@@ -484,9 +484,9 @@ export class SyncManager {
 
 			if (mediaInfo.media_type === 11 && mediaInfo.notebook_ext_info?.notebook_id) {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
-				const rawJson = await this.client!.getNoteContent(notebookId);
-				const mdContent = await this.jsonToMd.convert(rawJson, filePath, opts, item.title);
-				return this.prependFrontmatterField(mdContent, 'media_id', item.media_id);
+				const mdContent = await this.client!.getNoteContentMarkdown(notebookId);
+				const withImages = await this.imageHandler.processContent(mdContent, filePath, opts, item.title);
+				return this.prependFrontmatterField(withImages, 'media_id', item.media_id);
 			}
 
 			if (mediaInfo.url_info?.url) {
@@ -720,10 +720,28 @@ export class SyncManager {
 				// 按文件所在路径推断知识库分类/名称，确保图片存入正确附件子目录
 				// Infer KB category/name from file path so images land in the correct attachment subdirectory
 				const fileOpts = this.inferOptsFromFilePath(file.path, opts);
-				const fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
+
+				// 若笔记有 docid 且认证客户端可用，重新拉 Slate JSON 获取新鲜图片 URL（避免 COS 临时链接过期）
+				// If note has docid and auth client is available, re-fetch Slate JSON for fresh image URLs (avoids expired COS signed URLs)
+				const cache = this.app.metadataCache.getFileCache(file);
+				const docid = cache?.frontmatter?.docid;
+
+				let fixed = content;
+				if (docid && this.client) {
+					try {
+						const freshMd = await this.client.getNoteContentMarkdown(String(docid));
+						const withImages = await this.imageHandler.processContent(freshMd, file.path, fileOpts, file.basename);
+						fixed = `---\ndocid: "${docid}"\n---\n\n${withImages}`;
+					} catch (err) {
+						console.warn(`IMA Sync: 重新获取笔记内容失败，降级修复现有外链 / Re-fetch failed, falling back for ${file.path}:`, err);
+						fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
+					}
+				} else {
+					fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
+				}
+
 				if (fixed !== content) {
 					await this.vault.modify(file, fixed);
-					console.debug(`IMA Sync: 修复图片链接 / Fixed image links in: ${file.path}`);
 				}
 			} catch (err) {
 				console.warn(`IMA Sync: 修复图片链接失败 / Failed to fix image links in ${file.path}:`, err);

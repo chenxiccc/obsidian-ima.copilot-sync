@@ -240,6 +240,26 @@ export class ImaClient {
 	}
 
 	/**
+	 * 获取单篇笔记的 Markdown 内容（含动态重签名的图片 URL）
+	 * Get note content as Markdown (with dynamically re-signed image URLs)
+	 *
+	 * format=1 每次调用均对图片 URL 重新签名，可解决 format=2 静态签名过期问题
+	 * format=1 re-signs image URLs on every call, solving the stale signature issue of format=2
+	 */
+	async getNoteContentMarkdown(docId: string): Promise<string> {
+		const result = await this.post<GetDocContentResponse>(
+			'openapi/note/v1/get_doc_content',
+			{
+				doc_id: docId,
+				// 1=Markdown 格式，图片 URL 为每次调用时动态重签名的新鲜 COS URL
+				// 1=Markdown format, image URLs are dynamically re-signed on each call
+				target_content_format: 1,
+			},
+		);
+		return result.content;
+	}
+
+	/**
 	 * 获取可添加内容的知识库列表
 	 * Get list of knowledge bases the user can add content to
 	 */
