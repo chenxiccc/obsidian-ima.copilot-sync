@@ -223,23 +223,6 @@ export class ImaClient {
 	}
 
 	/**
-	 * 获取单篇笔记的纯文本内容
-	 * Get plain text content of a single note
-	 */
-	async getNoteContent(docId: string): Promise<string> {
-		const result = await this.post<GetDocContentResponse>(
-			'openapi/note/v1/get_doc_content',
-			{
-				doc_id: docId,
-				// 2=JSON 格式，可包含图片等富文本内容
-				// 2=JSON format, can include images and rich text content
-				target_content_format: 2,
-			},
-		);
-		return result.content;
-	}
-
-	/**
 	 * 获取单篇笔记的 Markdown 内容（含动态重签名的图片 URL）
 	 * Get note content as Markdown (with dynamically re-signed image URLs)
 	 *

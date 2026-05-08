@@ -718,8 +718,8 @@ export class SyncManager {
 				// Infer KB category/name from file path so images land in the correct attachment subdirectory
 				const fileOpts = this.inferOptsFromFilePath(file.path, opts);
 
-				// 若笔记有 docid 且认证客户端可用，重新拉 Slate JSON 获取新鲜图片 URL（避免 COS 临时链接过期）
-				// If note has docid and auth client is available, re-fetch Slate JSON for fresh image URLs (avoids expired COS signed URLs)
+				// 若笔记有 docid 且认证客户端可用，重新拉 Markdown 获取新鲜图片 URL（避免 COS 临时链接过期）
+				// If note has docid and auth client is available, re-fetch Markdown for fresh image URLs (avoids expired COS signed URLs)
 				const cache = this.app.metadataCache.getFileCache(file);
 				const docid = cache?.frontmatter?.docid;
 
@@ -731,9 +731,9 @@ export class SyncManager {
 						fixed = `---\ndocid: "${docid}"\n---\n\n${withImages}`;
 					} catch (err) {
 						console.warn(`IMA Sync: 重新获取笔记内容失败，降级修复现有外链 / Re-fetch failed, falling back for ${file.path}:`, err);
-						fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
 					}
-				} else {
+				}
+				if (fixed === content) {
 					fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
 				}
 
