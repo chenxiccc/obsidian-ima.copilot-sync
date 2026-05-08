@@ -345,6 +345,11 @@ export class SyncManager {
 		if (item.media_type === 6) {
 			const url = item.raw_file_url || item.source_path;
 			if (url && url.startsWith('http')) {
+				// 长链（含 __biz 参数）无 session cookie 时被微信拦截，改用 introduction/abstract 摘要
+				// Long-form URLs with __biz are blocked by WeChat without session cookie; use introduction/abstract instead
+				if (url.includes('__biz')) {
+					return this.buildWeChatIntroContent(item);
+				}
 				return await this.syncWebContent(stripWeChatTrackingParams(url), undefined, item.title, true, item.media_id);
 			}
 		}
@@ -386,6 +391,59 @@ export class SyncManager {
 			return `${fmBase}---\n\n# ${item.title}\n\n${preview}`;
 		}
 		return `${fmBase}---\n\n> 此条目为${typeLabel}，暂不支持自动同步内容。\n\n**标题**: ${item.title}`;
+	}
+
+	/**
+	 * 从 IMA API 的 introduction/abstract 字段构建微信长链文章内容
+	 * Build WeChat long-URL article content from IMA API's introduction/abstract fields
+	 */
+	private buildWeChatIntroContent(item: PublicKBItem & { folderPath: string }): string {
+		const intro = item.introduction ?? '';
+		const url = item.raw_file_url || item.source_path || '';
+
+		// 从 introduction 解析发布时间："发布时间: 2026年4月29日 10:49"
+		// Parse published time from introduction: "发布时间: 2026年4月29日 10:49"
+		const published = this.parseWeChatIntroTime(intro);
+
+		// 从 introduction 解析作者 / Parse author from introduction
+		const authorMatch = intro.match(/作者[：:]\s*([^\n发布]+)/);
+		const author = authorMatch?.[1]?.trim() ?? '';
+
+		// 直接使用 introduction 原文（含发布时间/地点等元数据）作为正文摘要
+		// Use introduction as-is (including publish time/location metadata) as body excerpt
+		const body = intro.trim();
+
+		const aiAbstract = item.abstract?.trim() ?? '';
+
+		const frontmatter = this.buildWebFrontmatter(url, author, published, item.media_id);
+		const parts: string[] = [frontmatter, `# ${item.title}\n`];
+
+		if (body) {
+			parts.push(body);
+			parts.push('');
+		}
+		if (aiAbstract) {
+			parts.push(`> **AI 摘要**：${aiAbstract}`);
+			parts.push('');
+		}
+		parts.push(`> 完整内容请访问原文：[${item.title}](${url})`);
+
+		return parts.join('\n');
+	}
+
+	/**
+	 * 从 introduction 字符串中解析发布时间
+	 * Parse published time from introduction string
+	 * 格式 / Format: "发布时间: 2026年4月29日 10:49" → "2026-04-29T10:49"
+	 */
+	private parseWeChatIntroTime(intro: string): string {
+		const match = intro.match(/发布时间[：:]\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{2}:\d{2})/);
+		if (match?.[1] && match[2] && match[3] && match[4]) {
+			const [, y, mo, d, hm] = match as [string, string, string, string, string];
+			const dateStr = `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}T${hm}`;
+			if (!isNaN(new Date(dateStr).getTime())) return dateStr;
+		}
+		return '';
 	}
 
 	/**
