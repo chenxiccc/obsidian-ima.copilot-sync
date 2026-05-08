@@ -14,9 +14,10 @@
 
 - **个人笔记同步**：将 IMA 笔记本中的所有笔记自动下载到 Obsidian
 - **知识库完整同步**：同步知识库中的所有类型条目
-  - **笔记**：完整同步 Slate 内容并转为 Markdown
-  - **网页/微信文章**：提取正文内容并转为 Markdown
-  - **文件**（PDF、Word、PPT、Excel 等）：下载到本地附件目录
+  - **笔记**：完整同步内容并转为 Markdown
+  - **网页**：提取正文内容并转为 Markdown
+  - **微信文章**：短链文章提取完整正文；长链文章（订阅/公共知识库）仅同步约 300 字摘要 + AI 摘要
+  - **文件**（PDF、Word、PPT、Excel 等）：个人/共享知识库可下载到本地；订阅/公共知识库仅同步 AI 摘要
 - **图片本地化**：自动下载笔记中的图片并保存到本地附件目录
 - **增量同步**：仅同步上次同步后有修改的笔记，减少不必要的请求
 - **灵活的附件路径**：支持三种附件保存位置模式
@@ -79,8 +80,13 @@
 
 ### 已知限制
 
+- **订阅/公共知识库内容受限**：IMA API 对订阅知识库有访问限制，各类型内容的同步能力如下：
+  - 笔记：仅同步约 300 字预览，无法获取完整内容
+  - 微信文章（长链）：微信服务端对无登录态的请求在路由层拦截，与 UA/headers 无关，无法绕过；仅同步约 300 字正文摘要 + AI 摘要，底部附原文链接
+  - 微信文章（短链）：可抓取完整正文
+  - 文件（PDF/Word 等）：仅同步 AI 摘要，无法下载原件
+  - 网页：可抓取完整正文
 - 知识库中部分条目如果 IMA API 未返回可访问的 URL，将仅同步标题（显示为占位符）
-- 图片 URL 为腾讯 COS 临时签名链接，约 8 小时后失效；插件会在每次同步时自动修复失效的图片链接
 
 ### 开发构建
 
@@ -171,7 +177,6 @@ Click **「测试」** to verify the connection.
 ### Known Limitations
 
 - Some knowledge base items may only sync the title (shown as a placeholder) if the IMA API does not return an accessible URL
-- Image URLs are Tencent COS temporary signed links that expire after ~8 hours; the plugin automatically repairs broken image links on each sync
 
 ### Development
 
