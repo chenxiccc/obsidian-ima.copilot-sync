@@ -860,18 +860,20 @@ export class SyncManager {
 		}
 	}
 
-	/** 递归将一个文件夹下所有文件移入回收站 / Recursively trash all files under a folder */
+	/** 递归将一个文件夹下所有文件移入回收站，并删除空文件夹（含顶层） / Recursively trash all files under a folder and remove empty directories */
 	private async trashFolder(folderPath: string): Promise<void> {
 		const exists = await this.vault.adapter.exists(folderPath);
 		if (!exists) return;
 
 		const listing = await this.vault.adapter.list(folderPath);
 		const allFiles: string[] = [...listing.files];
+		const allFolders: string[] = [];
 
 		// 递归收集子文件夹中的文件 / Recursively collect files in subfolders
 		const queue = [...listing.folders];
 		while (queue.length > 0) {
 			const folder = queue.pop()!;
+			allFolders.push(folder);
 			try {
 				const sub = await this.vault.adapter.list(folder);
 				allFiles.push(...sub.files);
@@ -892,6 +894,22 @@ export class SyncManager {
 			} catch (err) {
 				console.warn(`IMA Sync: 移入回收站失败 / Failed to trash: ${filePath}`, err);
 			}
+		}
+
+		// 从最深层到顶层依次删除空文件夹 / Remove empty folders from deepest to top
+		const sortedFolders = allFolders.sort((a, b) => b.length - a.length);
+		for (const folder of sortedFolders) {
+			try {
+				await this.vault.adapter.rmdir(folder, false);
+			} catch {
+				// 非空时忽略 / Ignore if not empty
+			}
+		}
+		// 删除顶层知识库文件夹 / Remove the top-level KB folder itself
+		try {
+			await this.vault.adapter.rmdir(folderPath, false);
+		} catch {
+			// 非空时忽略 / Ignore if not empty
 		}
 	}
 

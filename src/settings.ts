@@ -89,7 +89,8 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 // ─── 确认对话框（取消/删除知识库时询问是否清理本地文件）/ Confirm modal for KB removal ──
 
 class ConfirmModal extends Modal {
-	private confirmed = false;
+	// 'confirmed' | 'cancelled' | 'dismissed'
+	private result: 'confirmed' | 'cancelled' | 'dismissed' = 'dismissed';
 
 	constructor(
 		app: App,
@@ -99,6 +100,7 @@ class ConfirmModal extends Modal {
 		private readonly cancelLabel: string,
 		private readonly onConfirm: () => void,
 		private readonly onCancel: () => void,
+		private readonly onDismiss?: () => void,
 	) {
 		super(app);
 	}
@@ -112,12 +114,13 @@ class ConfirmModal extends Modal {
 
 		const confirmBtn = btnRow.createEl('button', { cls: 'mod-warning', text: this.confirmLabel });
 		confirmBtn.addEventListener('click', () => {
-			this.confirmed = true;
+			this.result = 'confirmed';
 			this.close();
 		});
 
 		const cancelBtn = btnRow.createEl('button', { text: this.cancelLabel });
 		cancelBtn.addEventListener('click', () => {
+			this.result = 'cancelled';
 			this.close();
 		});
 	}
@@ -125,10 +128,13 @@ class ConfirmModal extends Modal {
 	onClose(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		if (this.confirmed) {
+		if (this.result === 'confirmed') {
 			this.onConfirm();
-		} else {
+		} else if (this.result === 'cancelled') {
 			this.onCancel();
+		} else {
+			// 直接关窗，不做任何操作 / Dismissed without choosing — revert to previous state
+			this.onDismiss?.();
 		}
 	}
 }
@@ -386,6 +392,7 @@ export class ImaSettingTab extends PluginSettingTab {
 								'保留本地文件',
 								() => void removePersonal(true),
 								() => void removePersonal(false),
+								() => { checkbox.checked = true; },
 							).open();
 						}
 					};
@@ -463,6 +470,7 @@ export class ImaSettingTab extends PluginSettingTab {
 								'保留本地文件',
 								() => void removeSubscribed(true),
 								() => void removeSubscribed(false),
+								() => { checkbox.checked = true; },
 							).open();
 						}
 					};
