@@ -4,7 +4,6 @@ import type { AttachmentOptions } from './image-handler';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
 import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
-import { JsonToMarkdown } from './json-to-md';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
 import { CHROME_UA, sanitizeFilename, sanitizeTitle, ensureFolder, extractExtFromUrl, guessFileExtension } from './path-utils';
@@ -23,7 +22,6 @@ export class SyncManager {
 	private client: ImaClient | null = null;
 	private publicClient = new ImaPublicClient();
 	private imageHandler: ImageHandler;
-	private jsonToMd: JsonToMarkdown;
 	private fileDownloader: FileDownloader;
 	private isSyncing = false;
 
@@ -35,7 +33,6 @@ export class SyncManager {
 		private readonly resolveCredentials: () => { clientId: string | null; apiKey: string | null },
 	) {
 		this.imageHandler = new ImageHandler(vault);
-		this.jsonToMd = new JsonToMarkdown(this.imageHandler);
 		this.fileDownloader = new FileDownloader(vault);
 	}
 
