@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, sanitizeTitle, ensureFolder, extractExtFromUrl, guessFileExtension, extractFilenameFromUrl } from './path-utils';
+import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ const MEDIA_TYPE_LABELS: Record<number, string> = {
 const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
 
 /** IMA 笔记中文件附件的 <file> 标签正则 / Regex for file attachment <file> tags in IMA notes */
-const FILE_TAG_REGEX = /<file\s+([^>]*?)\s*\/>/g;
+const FILE_TAG_REGEX = /<file\s+([^>]*)\s*\/>/g;
 
 export class SyncManager {
 	private client: ImaClient | null = null;
@@ -166,7 +166,7 @@ export class SyncManager {
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const rawContent = await this.client.getNoteContentMarkdown(note.docid);
-					console.log(`IMA Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
+					console.debug(`IMA Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
 					const withFiles = await this.processInlineFileTags(rawContent, filePath, opts);
 					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, filename);
 					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${withImages}`;
@@ -753,14 +753,9 @@ export class SyncManager {
 		}
 	}
 
-	/** 从 URL 推断下载文件名 / Infer download filename from URL */
+	/** 调用 path-utils 的 buildStableFilename 生成稳定文件名 / Delegates to buildStableFilename */
 	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
-		let extracted = extractFilenameFromUrl(url);
-		const hasExt = extracted.includes('.');
-		const ext = hasExt ? '' : (extractExtFromUrl(url) || guessFileExtension(url));
-		const baseFilename = extracted || `file${ext}`;
-		const safeTitle = sanitizeTitle(fallbackTitle, 'file');
-		return sanitizeFilename(`${safeTitle}-${baseFilename}`);
+		return buildStableFilename(url, { titleBase: fallbackTitle, fallbackName: 'file' });
 	}
 
 	/**
@@ -774,8 +769,9 @@ export class SyncManager {
 		noteFilePath: string,
 		opts: AttachmentOptions,
 	): Promise<string> {
+		if (!this.client) return content;
 		const matches = [...content.matchAll(FILE_TAG_REGEX)];
-		console.log(`IMA Sync: processInlineFileTags found ${matches.length} file tags`);
+		console.debug(`IMA Sync: processInlineFileTags found ${matches.length} file tags`);
 		if (matches.length === 0) return content;
 
 		let result = content;

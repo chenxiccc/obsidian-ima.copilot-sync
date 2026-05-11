@@ -148,6 +148,40 @@ export function extractFilenameFromUrl(url: string): string {
 	return '';
 }
 
+/**
+ * 从 URL 构建稳定的本地文件名：单次 URL 解析同时提取文件名和扩展名，
+ * 结合 title 前缀，确保同一 URL 始终生成同一文件名
+ * Build stable local filename from URL: single URL parse extracts both filename and extension,
+ * combines with title prefix, ensuring same URL always produces same filename
+ */
+export function buildStableFilename(
+	url: string,
+	options: { titleBase?: string; fallbackName: string; fallbackExt?: string },
+): string {
+	let filename = '';
+	let ext = '';
+	try {
+		const urlObj = new URL(url);
+		const segments = urlObj.pathname.split('/').filter(s => s.length > 0);
+		const lastSegment = segments[segments.length - 1];
+		if (lastSegment) {
+			filename = decodeURIComponent(lastSegment);
+			const dotIdx = filename.lastIndexOf('.');
+			if (dotIdx > 0) {
+				ext = filename.slice(dotIdx).toLowerCase();
+			}
+		}
+	} catch { /* ignore */ }
+
+	if (!ext) {
+		ext = extractExtFromUrl(url) || guessFileExtension(url) || options.fallbackExt || '';
+	}
+
+	const safeTitle = sanitizeTitle(options.titleBase, options.fallbackName);
+	const baseFilename = filename || `${options.fallbackName}${ext}`;
+	return sanitizeFilename(`${safeTitle}-${sanitizeFilename(baseFilename)}`);
+}
+
 /** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
 export function guessFileExtension(url: string): string {
 	const lower = url.toLowerCase();
