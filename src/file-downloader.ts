@@ -69,7 +69,7 @@ export class FileDownloader {
 
 		const linkText = isImage
 			? this.formatImageLink(sanitized, destPath, noteFilePath, opts)
-			: this.formatFileLink(sanitized, destPath, noteFilePath);
+			: this.formatFileLink(sanitized, destPath, noteFilePath, opts);
 
 		return { localPath: destPath, linkText };
 	}
@@ -211,7 +211,8 @@ export class FileDownloader {
 		// Markdown 格式，计算相对路径 / Markdown format, calculate relative path
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		return `![](${relPath})`;
+		const safePath = relPath.includes(' ') ? `<${relPath}>` : relPath;
+		return `![](${safePath})`;
 	}
 
 	/** 格式化文件链接 / Format file link */
@@ -219,9 +220,18 @@ export class FileDownloader {
 		filename: string,
 		destPath: string,
 		noteFilePath: string,
+		opts: AttachmentOptions,
 	): string {
+		const format = resolveLinkFormat(this.vault, opts.linkFormat);
+
+		if (format === 'wikilink') {
+			return `[[${filename}]]`;
+		}
+
+		// Markdown 格式，计算相对路径 / Markdown format, calculate relative path
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		return `[${filename}](${relPath})`;
+		const safePath = relPath.includes(' ') ? `<${relPath}>` : relPath;
+		return `[${filename}](${safePath})`;
 	}
 }
