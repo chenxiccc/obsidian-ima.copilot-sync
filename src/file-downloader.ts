@@ -211,8 +211,7 @@ export class FileDownloader {
 		// Markdown 格式，计算相对路径 / Markdown format, calculate relative path
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
-		return `![](${encoded})`;
+		return `![](${relPath})`;
 	}
 
 	/** 格式化文件链接 / Format file link */
@@ -223,7 +222,6 @@ export class FileDownloader {
 	): string {
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
-		return `[${filename}](${encoded})`;
+		return `[${filename}](${relPath})`;
 	}
 }

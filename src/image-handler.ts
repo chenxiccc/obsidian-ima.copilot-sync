@@ -302,8 +302,7 @@ export class ImageHandler {
 
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		const encoded = relPath.split('/').map(seg => encodeURIComponent(seg)).join('/');
-		return `![${alt}](${encoded})`;
+		return `![${alt}](${relPath})`;
 	}
 
 	/** 调用 path-utils 的 buildStableFilename 生成稳定文件名 / Delegates to buildStableFilename */
