@@ -130,6 +130,24 @@ export function extractExtFromUrl(url: string): string {
 	return '';
 }
 
+/**
+ * 从 URL path 提取文件名（不含签名参数），用于生成稳定的本地文件名
+ * Extract filename from URL path (without signature params), for stable local filenames
+ *
+ * 例如 /note/abc123/photo.png?sign=xxx → "photo.png"
+ */
+export function extractFilenameFromUrl(url: string): string {
+	try {
+		const urlObj = new URL(url);
+		const segments = urlObj.pathname.split('/').filter(s => s.length > 0);
+		const lastSegment = segments[segments.length - 1];
+		if (lastSegment) {
+			return decodeURIComponent(lastSegment);
+		}
+	} catch { /* ignore */ }
+	return '';
+}
+
 /** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
 export function guessFileExtension(url: string): string {
 	const lower = url.toLowerCase();

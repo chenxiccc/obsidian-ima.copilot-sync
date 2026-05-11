@@ -15,6 +15,7 @@ import {
 	guessFileExtension,
 	isDownloadableFileUrl,
 	DOWNLOADABLE_FILE_EXTENSIONS,
+	extractFilenameFromUrl,
 } from './path-utils';
 
 // 匹配 Markdown 图片语法：![alt](https://...) / Match Markdown image syntax
@@ -30,13 +31,11 @@ export interface ImageNamingContext {
 	titleBase?: string;
 	/** 自增索引（可变引用）/ Auto-increment index (mutable reference) */
 	imgIndex: { value: number };
-	/** 时间戳 / Timestamp */
-	timestamp: number;
 }
 
 /** 创建默认图片命名上下文 / Create default image naming context */
 export function createNamingContext(titleBase?: string): ImageNamingContext {
-	return { titleBase, imgIndex: { value: 1 }, timestamp: Date.now() };
+	return { titleBase, imgIndex: { value: 1 } };
 }
 
 // ─── 附件处理选项 / Attachment processing options ────────────────────────────
@@ -312,11 +311,20 @@ export class ImageHandler {
 		return `![${alt}](${encoded})`;
 	}
 
-	/** 从 URL 生成合法文件名：titleBase-timestamp-N.ext / Generate valid filename from URL: titleBase-timestamp-N.ext */
+	/**
+	 * 从 URL 提取稳定文件名，用于生成去重本地文件名
+	 * 提取 URL path 最后一段（不含签名参数），结合笔记标题前缀，确保同一 URL 始终生成同一文件名
+	 * Extract stable filename from URL for dedup-friendly local filenames
+	 * Uses the last segment of URL path (excluding signature params) with note title prefix,
+	 * ensuring the same URL always produces the same filename
+	 */
 	private urlToFilename(url: string, naming: ImageNamingContext): string {
-		const ext = extractExtFromUrl(url) || guessFileExtension(url) || '.png';
+		const extracted = extractFilenameFromUrl(url);
+		const hasExt = extracted.includes('.');
+		const ext = hasExt ? '' : (extractExtFromUrl(url) || guessFileExtension(url) || '.png');
+		const baseFilename = extracted || `${naming.imgIndex.value}${ext}`;
 		const safeTitle = sanitizeTitle(naming.titleBase, 'img');
-		return `${safeTitle}-${naming.timestamp}-${naming.imgIndex.value}${ext}`;
+		return `${safeTitle}-${sanitizeFilename(baseFilename)}`;
 	}
 
 	/**

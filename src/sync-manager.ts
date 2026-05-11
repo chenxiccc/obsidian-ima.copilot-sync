@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, sanitizeTitle, ensureFolder, extractExtFromUrl, guessFileExtension } from './path-utils';
+import { CHROME_UA, sanitizeFilename, sanitizeTitle, ensureFolder, extractExtFromUrl, guessFileExtension, extractFilenameFromUrl } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -154,8 +154,8 @@ export class SyncManager {
 			// 增量同步：新笔记，或上次同步后有修改的 / Incremental sync: new or modified since last sync
 			for (const note of allNotes) {
 				try {
-					// modify_time 为秒级，lastSyncTime 为毫秒级 / modify_time is seconds, lastSyncTime is ms
-					if (existingMap.has(note.docid) && note.modify_time * 1000 <= this.settings.lastSyncTime) continue;
+					// modify_time 为毫秒级，lastSyncTime 为毫秒级 / modify_time is ms, lastSyncTime is also ms
+					if (existingMap.has(note.docid) && note.modify_time <= this.settings.lastSyncTime) continue;
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const processedContent = await this.client.getNoteContentMarkdown(note.docid);
@@ -746,9 +746,12 @@ export class SyncManager {
 
 	/** 从 URL 推断下载文件名 / Infer download filename from URL */
 	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
-		const ext = extractExtFromUrl(url) || guessFileExtension(url);
+		let extracted = extractFilenameFromUrl(url);
+		const hasExt = extracted.includes('.');
+		const ext = hasExt ? '' : (extractExtFromUrl(url) || guessFileExtension(url));
+		const baseFilename = extracted || `file${ext}`;
 		const safeTitle = sanitizeTitle(fallbackTitle, 'file');
-		return `${safeTitle}-${Date.now()}-1${ext}`;
+		return sanitizeFilename(`${safeTitle}-${baseFilename}`);
 	}
 
 	/** 构建占位符内容 / Build placeholder content */
