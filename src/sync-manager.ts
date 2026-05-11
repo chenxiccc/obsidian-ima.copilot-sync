@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, ensureFolder } from './path-utils';
+import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -730,7 +730,11 @@ export class SyncManager {
 		}
 
 		try {
-			const filename = this.inferFilenameFromUrl(url, title);
+			// 图片从 URL 提取扩展名（KB 图片标题可能无扩展名），非图片文件直接用标题（标题即原名）
+			// Images extract extension from URL (KB image titles may lack ext), non-image files use title directly
+			const filename = isImage
+				? buildStableFilename(url, { titleBase: title, fallbackName: 'img', fallbackExt: '.png' })
+				: sanitizeFilename(title);
 
 			const result = await this.fileDownloader.downloadFile({
 				url,
@@ -753,10 +757,6 @@ export class SyncManager {
 		}
 	}
 
-	/** 知识库文件条目标题即原始文件名，直接使用 / KB file item title IS the original filename */
-	private inferFilenameFromUrl(_url: string, fallbackTitle: string): string {
-		return sanitizeFilename(fallbackTitle);
-	}
 
 	/**
 	 * 处理 IMA 笔记中 <file> 标签格式的文件附件：调 get_media_info 获取下载 URL，

@@ -178,7 +178,9 @@ export function buildStableFilename(
 	}
 
 	const safeTitle = sanitizeTitle(options.titleBase, options.fallbackName);
-	const baseFilename = filename || `${options.fallbackName}${ext}`;
+	const baseFilename = filename
+		? (filename.includes('.') ? filename : `${filename}${ext}`)
+		: `${options.fallbackName}${ext}`;
 	return sanitizeFilename(`${safeTitle}-${sanitizeFilename(baseFilename)}`);
 }
 
