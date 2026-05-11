@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder } from './path-utils';
+import { CHROME_UA, sanitizeFilename, ensureFolder } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -753,9 +753,9 @@ export class SyncManager {
 		}
 	}
 
-	/** 调用 path-utils 的 buildStableFilename 生成稳定文件名 / Delegates to buildStableFilename */
+	/** 知识库文件条目标题即原始文件名，直接使用 / KB file item title IS the original filename */
 	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
-		return buildStableFilename(url, { titleBase: fallbackTitle, fallbackName: 'file' });
+		return sanitizeFilename(fallbackTitle);
 	}
 
 	/**
