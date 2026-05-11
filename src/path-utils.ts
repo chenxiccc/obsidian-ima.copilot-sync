@@ -182,6 +182,11 @@ export function buildStableFilename(
 	return sanitizeFilename(`${safeTitle}-${sanitizeFilename(baseFilename)}`);
 }
 
+/** Markdown 链接路径含空格时用 <> 包裹 / Wrap Markdown link path with <> when it contains spaces */
+export function escapePathForMarkdown(relPath: string): string {
+	return relPath.includes(' ') ? `<${relPath}>` : relPath;
+}
+
 /** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
 export function guessFileExtension(url: string): string {
 	const lower = url.toLowerCase();

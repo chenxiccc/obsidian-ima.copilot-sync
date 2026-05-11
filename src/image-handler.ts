@@ -2,6 +2,7 @@ import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
 import {
+	escapePathForMarkdown,
 	CHROME_UA,
 	sanitizeFilename,
 	buildStableFilename,
@@ -302,8 +303,7 @@ export class ImageHandler {
 
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		const safePath = relPath.includes(' ') ? `<${relPath}>` : relPath;
-		return `![${alt}](${safePath})`;
+		return `![${alt}](${escapePathForMarkdown(relPath)})`;
 	}
 
 	/** 调用 path-utils 的 buildStableFilename 生成稳定文件名 / Delegates to buildStableFilename */

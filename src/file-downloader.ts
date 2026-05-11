@@ -1,6 +1,7 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
 import {
+	escapePathForMarkdown,
 	CHROME_UA,
 	sanitizeFilename,
 	resolveAttachmentFolder,
@@ -211,8 +212,7 @@ export class FileDownloader {
 		// Markdown 格式，计算相对路径 / Markdown format, calculate relative path
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		const safePath = relPath.includes(' ') ? `<${relPath}>` : relPath;
-		return `![](${safePath})`;
+		return `![](${escapePathForMarkdown(relPath)})`;
 	}
 
 	/** 格式化文件链接 / Format file link */
@@ -231,7 +231,6 @@ export class FileDownloader {
 		// Markdown 格式，计算相对路径 / Markdown format, calculate relative path
 		const noteDir = extractNoteDir(noteFilePath);
 		const relPath = calcRelativePath(noteDir, destPath);
-		const safePath = relPath.includes(' ') ? `<${relPath}>` : relPath;
-		return `[${filename}](${safePath})`;
+		return `[${filename}](${escapePathForMarkdown(relPath)})`;
 	}
 }

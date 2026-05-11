@@ -754,7 +754,7 @@ export class SyncManager {
 	}
 
 	/** 知识库文件条目标题即原始文件名，直接使用 / KB file item title IS the original filename */
-	private inferFilenameFromUrl(url: string, fallbackTitle: string): string {
+	private inferFilenameFromUrl(_url: string, fallbackTitle: string): string {
 		return sanitizeFilename(fallbackTitle);
 	}
 
