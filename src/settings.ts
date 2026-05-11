@@ -658,8 +658,8 @@ export class ImaSettingTab extends PluginSettingTab {
 		// ── 附件下载设置 / Attachment download settings ──────────────────────
 
 		this.addDownloadToggleWithSizeLimit(containerEl, {
-			toggleName: '下载图片',
-			toggleDesc: '将图片下载到本地（关闭则保留原始链接）',
+			toggleName: '下载知识库图片',
+			toggleDesc: '个人笔记中的图片默认下载到本地（在线图片链接有时效签名，约 8 小时过期），此处仅控制知识库中的图片是否下载到本地',
 			limitName: '图片大小限制',
 			limitDesc: '超过限制的图片保留原始链接，不下载（0 = 不限制）',
 			toggleKey: 'downloadImages',
@@ -668,8 +668,8 @@ export class ImaSettingTab extends PluginSettingTab {
 		});
 
 		this.addDownloadToggleWithSizeLimit(containerEl, {
-			toggleName: '下载文件',
-			toggleDesc: '将 docx、PDF 等文件下载到本地（关闭则保留原始链接）',
+			toggleName: '下载知识库文件',
+			toggleDesc: '个人笔记中的文件默认下载到本地（在线文件链接有时效签名，约 8 小时过期），此处仅控制知识库中的 docx、PDF 等文件是否下载到本地',
 			limitName: '文件大小限制',
 			limitDesc: '超过限制的文件保留原始链接，不下载（0 = 不限制）',
 			toggleKey: 'downloadFiles',

@@ -18,6 +18,9 @@ const MEDIA_TYPE_LABELS: Record<number, string> = {
 
 const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
 
+/** IMA 笔记中文件附件的 <file> 标签正则 / Regex for file attachment <file> tags in IMA notes */
+const FILE_TAG_REGEX = /<file\s+([^>]*?)\s*\/>/g;
+
 export class SyncManager {
 	private client: ImaClient | null = null;
 	private publicClient = new ImaPublicClient();
@@ -126,6 +129,10 @@ export class SyncManager {
 	private async doSync(): Promise<number> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const opts = this.buildAttachmentOptions();
+		// 个人笔记的图片和文件强制下载到本地，避免 COS 签名 URL 约 8 小时过期
+		// Force download images and files for personal notes to avoid expired COS signed URLs (~8h TTL)
+		opts.downloadImages = true;
+		opts.downloadFiles = true;
 
 		await ensureFolder(this.vault, syncFolder);
 
@@ -158,8 +165,10 @@ export class SyncManager {
 					if (existingMap.has(note.docid) && note.modify_time <= this.settings.lastSyncTime) continue;
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
-					const processedContent = await this.client.getNoteContentMarkdown(note.docid);
-					const withImages = await this.imageHandler.processContent(processedContent, filePath, opts, filename);
+					const rawContent = await this.client.getNoteContentMarkdown(note.docid);
+					console.log(`IMA Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
+					const withFiles = await this.processInlineFileTags(rawContent, filePath, opts);
+					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, filename);
 					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${withImages}`;
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
@@ -752,6 +761,64 @@ export class SyncManager {
 		const baseFilename = extracted || `file${ext}`;
 		const safeTitle = sanitizeTitle(fallbackTitle, 'file');
 		return sanitizeFilename(`${safeTitle}-${baseFilename}`);
+	}
+
+	/**
+	 * 处理 IMA 笔记中 <file> 标签格式的文件附件：调 get_media_info 获取下载 URL，
+	 * 下载到附件目录，替换为本地 Markdown 链接
+	 * Process <file> tag file attachments in IMA notes: get download URL via get_media_info,
+	 * download to attachment dir, replace with local Markdown link
+	 */
+	private async processInlineFileTags(
+		content: string,
+		noteFilePath: string,
+		opts: AttachmentOptions,
+	): Promise<string> {
+		const matches = [...content.matchAll(FILE_TAG_REGEX)];
+		console.log(`IMA Sync: processInlineFileTags found ${matches.length} file tags`);
+		if (matches.length === 0) return content;
+
+		let result = content;
+		for (const match of matches) {
+			const attrStr = match[1];
+			if (!attrStr) continue;
+			const mediaId = this.extractAttr(attrStr, 'mediaId');
+			if (!mediaId) continue;
+
+			const filename = this.extractAttr(attrStr, 'filePath').split('/').pop() || 'file';
+			const cleanFilename = sanitizeFilename(filename);
+
+			try {
+				const mediaInfo = await this.client!.getMediaInfo(mediaId);
+				const url = mediaInfo.url_info?.url;
+				if (!url) continue;
+
+				const download = await this.fileDownloader.downloadFile({
+					url,
+					filename: cleanFilename,
+					noteFilePath,
+					opts,
+					isImage: false,
+				});
+
+				if (download.linkText) {
+					result = result.replace(match[0], download.linkText);
+				}
+			} catch (err) {
+				console.warn(
+					`IMA Sync: 文件附件下载失败 / File attachment download failed: ${cleanFilename} (${mediaId})`,
+					err,
+				);
+			}
+		}
+
+		return result;
+	}
+
+	/** 从 HTML/XML 属性字符串中提取指定属性的值 / Extract attribute value from HTML/XML attribute string */
+	private extractAttr(attrStr: string, name: string): string {
+		const match = attrStr.match(new RegExp(`${name}="([^"]*)"`));
+		return match?.[1] ?? '';
 	}
 
 	/** 构建占位符内容 / Build placeholder content */
