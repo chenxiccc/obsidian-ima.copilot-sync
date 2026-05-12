@@ -189,6 +189,16 @@ export function escapePathForMarkdown(relPath: string): string {
 	return relPath.includes(' ') ? `<${relPath}>` : relPath;
 }
 
+/** 转义正文中非标题的 # 号，避免 Obsidian 误识别为标签 / Escape inline # to prevent Obsidian tag misidentification */
+export function escapeInlineHash(text: string): string {
+	return text.split('\n').map(line => {
+		// 行首 #{1,6} 后跟空格是标题，保留 / Line starting with #{1,6} followed by space is a heading, preserve
+		if (/^#{1,6}\s/.test(line)) return line;
+		// 其他 # 后跟非空格字符的，加 \ 转义 / Escape other # followed by non-space
+		return line.replace(/#(?!\s)/g, '\\#');
+	}).join('\n');
+}
+
 /** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
 export function guessFileExtension(url: string): string {
 	const lower = url.toLowerCase();

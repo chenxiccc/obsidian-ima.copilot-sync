@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder } from './path-utils';
+import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -169,7 +169,7 @@ export class SyncManager {
 					console.debug(`IMA Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
 					const withFiles = await this.processInlineFileTags(rawContent, filePath, opts);
 					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, filename);
-					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${withImages}`;
+					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${escapeInlineHash(withImages)}`;
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
 				} catch (err) {
@@ -438,7 +438,7 @@ export class SyncManager {
 		}
 		parts.push(`> 完整内容请访问原文：[${item.title}](${url})`);
 
-		return parts.join('\n');
+		return escapeInlineHash(parts.join('\n'));
 	}
 
 	/**
@@ -551,7 +551,7 @@ export class SyncManager {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
 				const mdContent = await this.client!.getNoteContentMarkdown(notebookId);
 				const withImages = await this.imageHandler.processContent(mdContent, filePath, opts, item.title);
-				return this.prependFrontmatterField(withImages, 'media_id', item.media_id);
+				return this.prependFrontmatterField(escapeInlineHash(withImages), 'media_id', item.media_id);
 			}
 
 			if (mediaInfo.url_info?.url) {
@@ -655,7 +655,7 @@ export class SyncManager {
 			} else {
 				parts.push(`> 无法提取网页正文，请访问原文：[链接](${url})`);
 			}
-			return parts.join('\n');
+			return escapeInlineHash(parts.join('\n'));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			return `> 网页内容获取失败：${msg}\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
@@ -697,11 +697,7 @@ export class SyncManager {
 		try {
 			const date = new Date(input);
 			if (isNaN(date.getTime())) return null;
-			const iso = date.toISOString();
-			if (iso.slice(11, 19) === '00:00:00') {
-				return iso.slice(0, 10);
-			}
-			return iso.slice(0, 19);
+			return date.toISOString().slice(0, 19);
 		} catch {
 			return null;
 		}
