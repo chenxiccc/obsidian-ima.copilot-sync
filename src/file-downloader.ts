@@ -50,7 +50,7 @@ export class FileDownloader {
 		if (sizeLimitBytes > 0) {
 			const exceeded = await exceedsSizeLimit(url, sizeLimitBytes, headers);
 			if (exceeded) {
-				console.debug(`IMA Sync: 附件超过大小限制，保留原链接 / Attachment exceeds size limit, keeping link: ${url}`);
+				console.debug(`ima.copilot Sync: 附件超过大小限制，保留原链接 / Attachment exceeds size limit, keeping link: ${url}`);
 				const linkText = isImage ? `![${filename}](${url})` : `[${filename}](${url})`;
 				return { localPath: '', linkText };
 			}
@@ -96,7 +96,7 @@ export class FileDownloader {
 			return;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`IMA Sync: requestUrl 下载失败，尝试 Node.js fallback / requestUrl download failed, trying Node.js fallback: ${msg}`);
+			console.warn(`ima.copilot Sync: requestUrl 下载失败，尝试 Node.js fallback / requestUrl download failed, trying Node.js fallback: ${msg}`);
 		}
 
 		// 兜底：Node.js https.get（仅桌面端 Electron 环境）
@@ -115,7 +115,7 @@ export class FileDownloader {
 		destPath: string,
 		headers: Record<string, string>,
 	): Promise<void> {
-		console.debug(`IMA Sync: 开始下载文件 / Downloading file: ${url.substring(0, 100)}...`);
+		console.debug(`ima.copilot Sync: 开始下载文件 / Downloading file: ${url.substring(0, 100)}...`);
 
 		const response = await requestUrl({
 			url,
@@ -132,11 +132,11 @@ export class FileDownloader {
 		// Small file detection: < 1024 bytes may be anti-hotlink error page
 		const buffer = response.arrayBuffer;
 		if (buffer.byteLength < 1024) {
-			console.warn(`IMA Sync: 下载文件仅 ${buffer.byteLength} 字节，可能是防盗链错误页 / Downloaded file only ${buffer.byteLength} bytes, may be anti-hotlink error page: ${url}`);
+			console.warn(`ima.copilot Sync: 下载文件仅 ${buffer.byteLength} 字节，可能是防盗链错误页 / Downloaded file only ${buffer.byteLength} bytes, may be anti-hotlink error page: ${url}`);
 		}
 
 		await this.vault.adapter.writeBinary(destPath, buffer);
-		console.debug(`IMA Sync: 文件已保存 / File saved: ${destPath}`);
+		console.debug(`ima.copilot Sync: 文件已保存 / File saved: ${destPath}`);
 	}
 
 	/** 通过 Node.js https.get 下载（桌面端兜底）/ Download via Node.js https.get (desktop fallback) */
@@ -175,11 +175,11 @@ export class FileDownloader {
 					try {
 						const buffer = Buffer.concat(chunks);
 						if (buffer.length < 1024) {
-							console.warn(`IMA Sync: Node.js 下载仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js download only ${buffer.length} bytes, may be anti-hotlink error page`);
+							console.warn(`ima.copilot Sync: Node.js 下载仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js download only ${buffer.length} bytes, may be anti-hotlink error page`);
 						}
 
 						await this.vault.adapter.writeBinary(destPath, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer);
-						console.debug(`IMA Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
+						console.debug(`ima.copilot Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
 						resolve();
 					} catch (err) {
 						reject(err);

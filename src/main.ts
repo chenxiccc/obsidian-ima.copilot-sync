@@ -27,14 +27,14 @@ export default class ImaPlugin extends Plugin {
 		);
 
 		// ── Ribbon 手动同步按钮 / Ribbon manual sync button ─────────────────
-		this.addRibbonIcon('refresh-cw', 'IMA Sync：立即同步', () => {
+		this.addRibbonIcon('refresh-cw', 'ima.copilot Sync：立即同步', () => {
 			void this.triggerSync();
 		});
 
 		// ── 命令面板 / Command palette ───────────────────────────────────────
 		this.addCommand({
 			id: 'ima-sync-now',
-			name: '立即同步 IMA 笔记',
+			name: '立即同步 ima.copilot 笔记',
 			callback: () => {
 				void this.triggerSync();
 			},

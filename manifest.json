@@ -1,7 +1,7 @@
 {
-	"id": "obsidian-ima-sync",
-	"name": "IMA Sync",
-	"version": "3.9.6",
+	"id": "ima-copilot-sync",
+	"name": "ima.copilot Sync",
+	"version": "4.0.0",
 	"minAppVersion": "1.11.4",
 	"description": "Sync notes from IMA personal knowledge base to Obsidian",
 	"author": "",

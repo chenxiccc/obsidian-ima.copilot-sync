@@ -126,7 +126,7 @@ export class ImageHandler {
 				if (opts.imageSizeLimitBytes > 0) {
 					const exceeded = await exceedsSizeLimit(url, opts.imageSizeLimitBytes);
 					if (exceeded) {
-						console.debug(`IMA Sync: 图片超过大小限制，保留原链接 / Image exceeds size limit, keeping link: ${url}`);
+						console.debug(`ima.copilot Sync: 图片超过大小限制，保留原链接 / Image exceeds size limit, keeping link: ${url}`);
 						continue;
 					}
 				}
@@ -142,7 +142,7 @@ export class ImageHandler {
 				const link = this.formatLink(filename, destPath, noteFilePath, alt, opts.linkFormat);
 				content = content.replace(full, link);
 			} catch {
-				console.warn(`IMA Sync: 图片下载失败，跳过 / Image download failed, skipping: ${url}`);
+				console.warn(`ima.copilot Sync: 图片下载失败，跳过 / Image download failed, skipping: ${url}`);
 			}
 		}
 
@@ -191,7 +191,7 @@ export class ImageHandler {
 					content = content.replace(full, result.linkText);
 				}
 			} catch {
-				console.warn(`IMA Sync: 文件下载失败，跳过 / File download failed, skipping: ${url}`);
+				console.warn(`ima.copilot Sync: 文件下载失败，跳过 / File download failed, skipping: ${url}`);
 			}
 		}
 
@@ -324,7 +324,7 @@ export class ImageHandler {
 
 	/** 下载图片并写入 vault / Download image and write to vault */
 	private async downloadImage(url: string, destPath: string): Promise<void> {
-		console.debug(`IMA Sync: 开始下载图片 / Downloading image: ${url.substring(0, 100)}...`);
+		console.debug(`ima.copilot Sync: 开始下载图片 / Downloading image: ${url.substring(0, 100)}...`);
 		const response = await requestUrl({
 			url,
 			method: 'GET',
@@ -336,15 +336,15 @@ export class ImageHandler {
 			throw: false,
 		});
 
-		console.debug(`IMA Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
+		console.debug(`ima.copilot Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
 
 		if (response.status >= 400) {
 			const bodySnippet = response.text?.substring(0, 500) ?? '';
-			console.error(`IMA Sync: 图片下载失败 / Image download failed: HTTP ${response.status}, body: ${bodySnippet}`);
+			console.error(`ima.copilot Sync: 图片下载失败 / Image download failed: HTTP ${response.status}, body: ${bodySnippet}`);
 			throw new Error(`HTTP ${response.status}`);
 		}
 
 		await this.vault.adapter.writeBinary(destPath, response.arrayBuffer);
-		console.debug(`IMA Sync: 图片已保存 / Image saved: ${destPath}`);
+		console.debug(`ima.copilot Sync: 图片已保存 / Image saved: ${destPath}`);
 	}
 }

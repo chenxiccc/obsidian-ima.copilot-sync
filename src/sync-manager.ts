@@ -46,7 +46,7 @@ export class SyncManager {
 
 	async syncOnce(): Promise<void> {
 		if (this.isSyncing) {
-			new Notice('IMA Sync: 同步正在进行中，请稍候');
+			new Notice('ima.copilot Sync: 同步正在进行中，请稍候');
 			return;
 		}
 
@@ -67,24 +67,24 @@ export class SyncManager {
 		);
 		const hasPublicWork = this.settings.publicKnowledgeBases.length > 0;
 		if ((hasPrivateWork || hasSubscribedKBNeedingConversion) && !hasCredentials) {
-			new Notice('IMA Sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
+			new Notice('ima.copilot Sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
 			return;
 		}
 		if (!hasPrivateWork && !hasPublicWork) {
-			new Notice('IMA Sync: 没有可执行的同步任务');
+			new Notice('ima.copilot Sync: 没有可执行的同步任务');
 			return;
 		}
 
 		this.isSyncing = true;
-		new Notice('IMA Sync: 开始同步…');
+		new Notice('ima.copilot Sync: 开始同步…');
 
 		try {
 			const syncedCount = await this.doSync();
-			new Notice(`IMA Sync: 同步完成，共同步 ${syncedCount} 篇笔记`);
+			new Notice(`ima.copilot Sync: 同步完成，共同步 ${syncedCount} 篇笔记`);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			console.error('IMA Sync error:', err);
-			new Notice(`IMA Sync: 同步失败 — ${msg}`);
+			console.error('ima.copilot Sync error:', err);
+			new Notice(`ima.copilot Sync: 同步失败 — ${msg}`);
 		} finally {
 			this.isSyncing = false;
 		}
@@ -152,7 +152,7 @@ export class SyncManager {
 					try {
 						await this.handleDeletedItem(filePath, opts);
 					} catch (err) {
-						console.warn(`IMA Sync: 笔记删除同步失败 / Note delete sync failed for ${filePath}:`, err);
+						console.warn(`ima.copilot Sync: 笔记删除同步失败 / Note delete sync failed for ${filePath}:`, err);
 					}
 					existingMap.delete(docid);
 				}
@@ -166,14 +166,14 @@ export class SyncManager {
 					const filename = sanitizeFilename(note.title || note.docid);
 					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
 					const rawContent = await this.client.getNoteContentMarkdown(note.docid);
-					console.debug(`IMA Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
+					console.debug(`ima.copilot Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
 					const withFiles = await this.processInlineFileTags(rawContent, filePath, opts);
 					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, filename);
 					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${escapeInlineHash(withImages)}`;
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
 				} catch (err) {
-					console.warn(`IMA Sync: 笔记 "${note.title}" 同步失败`, err);
+					console.warn(`ima.copilot Sync: 笔记 "${note.title}" 同步失败`, err);
 				}
 			}
 		}
@@ -199,7 +199,7 @@ export class SyncManager {
 							try {
 								await this.handleDeletedItem(filePath, kbOpts);
 							} catch (err) {
-								console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+								console.warn(`ima.copilot Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
 							}
 							existingMap.delete(mediaId);
 						}
@@ -217,12 +217,12 @@ export class SyncManager {
 								syncedCount++;
 							}
 						} catch (err) {
-							console.warn(`IMA Sync: 知识库条目 "${item.title}" 同步失败`, err);
+							console.warn(`ima.copilot Sync: 知识库条目 "${item.title}" 同步失败`, err);
 						}
 					}
 				} catch (err) {
-					console.warn(`IMA Sync: 个人知识库 "${pkb.name}" 同步失败`, err);
-					new Notice(`IMA Sync: 个人知识库 "${pkb.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
+					console.warn(`ima.copilot Sync: 个人知识库 "${pkb.name}" 同步失败`, err);
+					new Notice(`ima.copilot Sync: 个人知识库 "${pkb.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}
 		}
@@ -234,8 +234,8 @@ export class SyncManager {
 					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions(pubKB.name || undefined, pubKB.kbCategory || '订阅和公共知识库'));
 					syncedCount += count;
 				} catch (err) {
-					console.warn(`IMA Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
-					new Notice(`IMA Sync: 公共知识库 "${pubKB.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
+					console.warn(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
+					new Notice(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
 				}
 			}
 		}
@@ -289,7 +289,7 @@ export class SyncManager {
 				: [];
 
 		if (items.length === 0) {
-			console.warn(`IMA Sync: 公共知识库 "${pubKB.name}" 无条目或无法获取`);
+			console.warn(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 无条目或无法获取`);
 			return 0;
 		}
 
@@ -303,7 +303,7 @@ export class SyncManager {
 				try {
 					await this.handleDeletedItem(filePath, opts);
 				} catch (err) {
-					console.warn(`IMA Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+					console.warn(`ima.copilot Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
 				}
 				existingMap.delete(mediaId);
 			}
@@ -328,7 +328,7 @@ export class SyncManager {
 					count++;
 				}
 			} catch (err) {
-				console.warn(`IMA Sync: 公共知识库条目 "${item.title}" 同步失败`, err);
+				console.warn(`ima.copilot Sync: 公共知识库条目 "${item.title}" 同步失败`, err);
 			}
 		}
 
@@ -515,14 +515,14 @@ export class SyncManager {
 			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
 			await this.cleanOrphanImages(oldPaths, filePath);
 			await this.vault.delete(file);
-			console.debug(`IMA Sync: 删除已移除条目 / Deleted removed item: ${filePath}`);
+			console.debug(`ima.copilot Sync: 删除已移除条目 / Deleted removed item: ${filePath}`);
 		} else if (mode === 'mark-deleted') {
 			if (filePath.includes('[deleted]')) return;
 			const newFilePath = filePath.replace(/\.md$/, ' [deleted].md');
 			try {
 				await this.vault.adapter.rename(filePath, newFilePath);
 			} catch (renameErr) {
-				console.warn(`IMA Sync: 标记删除重命名失败 / Mark-deleted rename failed: ${filePath}`, renameErr);
+				console.warn(`ima.copilot Sync: 标记删除重命名失败 / Mark-deleted rename failed: ${filePath}`, renameErr);
 				return;
 			}
 			const renamedFile = this.vault.getFileByPath(newFilePath);
@@ -531,7 +531,7 @@ export class SyncManager {
 				const updated = this.prependFrontmatterField(content, 'sync_status', 'deleted');
 				await this.vault.modify(renamedFile, updated);
 			}
-			console.debug(`IMA Sync: 标记已删除条目 / Marked deleted item: ${newFilePath}`);
+			console.debug(`ima.copilot Sync: 标记已删除条目 / Marked deleted item: ${newFilePath}`);
 		}
 	}
 
@@ -561,7 +561,7 @@ export class SyncManager {
 
 			return this.buildPlaceholder(item);
 		} catch (err) {
-			console.warn(`IMA Sync: get_media_info 失败，使用占位符 / get_media_info failed, using placeholder: ${item.media_id}`, err);
+			console.warn(`ima.copilot Sync: get_media_info 失败，使用占位符 / get_media_info failed, using placeholder: ${item.media_id}`, err);
 			return this.buildPlaceholder(item);
 		}
 	}
@@ -767,7 +767,7 @@ export class SyncManager {
 	): Promise<string> {
 		if (!this.client) return content;
 		const matches = [...content.matchAll(FILE_TAG_REGEX)];
-		console.debug(`IMA Sync: processInlineFileTags found ${matches.length} file tags`);
+		console.debug(`ima.copilot Sync: processInlineFileTags found ${matches.length} file tags`);
 		if (matches.length === 0) return content;
 
 		let result = content;
@@ -798,7 +798,7 @@ export class SyncManager {
 				}
 			} catch (err) {
 				console.warn(
-					`IMA Sync: 文件附件下载失败 / File attachment download failed: ${cleanFilename} (${mediaId})`,
+					`ima.copilot Sync: 文件附件下载失败 / File attachment download failed: ${cleanFilename} (${mediaId})`,
 					err,
 				);
 			}
@@ -851,7 +851,7 @@ export class SyncManager {
 						const withImages = await this.imageHandler.processContent(freshMd, file.path, fileOpts, file.basename);
 						fixed = `---\ndocid: "${docid}"\n---\n\n${withImages}`;
 					} catch (err) {
-						console.warn(`IMA Sync: 重新获取笔记内容失败，降级修复现有外链 / Re-fetch failed, falling back for ${file.path}:`, err);
+						console.warn(`ima.copilot Sync: 重新获取笔记内容失败，降级修复现有外链 / Re-fetch failed, falling back for ${file.path}:`, err);
 					}
 				}
 				if (fixed === content) {
@@ -862,7 +862,7 @@ export class SyncManager {
 					await this.vault.modify(file, fixed);
 				}
 			} catch (err) {
-				console.warn(`IMA Sync: 修复图片链接失败 / Failed to fix image links in ${file.path}:`, err);
+				console.warn(`ima.copilot Sync: 修复图片链接失败 / Failed to fix image links in ${file.path}:`, err);
 			}
 		}
 	}
@@ -959,7 +959,7 @@ export class SyncManager {
 					await this.vault.adapter.remove(filePath);
 				}
 			} catch (err) {
-				console.warn(`IMA Sync: 移入回收站失败 / Failed to trash: ${filePath}`, err);
+				console.warn(`ima.copilot Sync: 移入回收站失败 / Failed to trash: ${filePath}`, err);
 			}
 		}
 
@@ -1018,10 +1018,10 @@ export class SyncManager {
 				if (!referencedFilenames.has(filename) &&
 					!referencedFilenames.has(encodeURIComponent(filename))) {
 					await this.vault.adapter.remove(imgPath);
-					console.debug(`IMA Sync: 删除孤儿图片 / Removed orphan image: ${imgPath}`);
+					console.debug(`ima.copilot Sync: 删除孤儿图片 / Removed orphan image: ${imgPath}`);
 				}
 			} catch (err) {
-				console.warn(`IMA Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);
+				console.warn(`ima.copilot Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);
 			}
 		}
 	}
