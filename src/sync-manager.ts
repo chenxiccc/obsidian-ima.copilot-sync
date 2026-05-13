@@ -469,8 +469,8 @@ export class SyncManager {
 		for (const file of mdFiles) {
 			const cache = this.app.metadataCache.getFileCache(file);
 			const mediaId = (cache?.frontmatter as Record<string, unknown>)?.['media_id'];
-			if (mediaId) {
-				map.set(String(mediaId), file.path);
+			if (typeof mediaId === 'string') {
+				map.set(mediaId, file.path);
 			}
 		}
 
@@ -492,8 +492,8 @@ export class SyncManager {
 		for (const file of mdFiles) {
 			const cache = this.app.metadataCache.getFileCache(file);
 			const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
-			if (docid) {
-				map.set(String(docid), file.path);
+			if (typeof docid === 'string') {
+				map.set(docid, file.path);
 			}
 		}
 
@@ -845,9 +845,9 @@ export class SyncManager {
 				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
 
 				let fixed = content;
-				if (docid && this.client) {
+				if (typeof docid === 'string' && this.client) {
 					try {
-						const freshMd = await this.client.getNoteContentMarkdown(String(docid));
+						const freshMd = await this.client.getNoteContentMarkdown(docid);
 						const withImages = await this.imageHandler.processContent(freshMd, file.path, fileOpts, file.basename);
 						fixed = `---\ndocid: "${docid}"\n---\n\n${withImages}`;
 					} catch (err) {

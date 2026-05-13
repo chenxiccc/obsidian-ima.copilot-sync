@@ -163,7 +163,7 @@ export class ImaSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl).setName('ima.copilot Sync 设置').setHeading();
+		new Setting(containerEl).setName('同步设置').setHeading();
 
 		// ── 认证凭证（灰色分组框）/ Credentials (grouped box) ─────────────────
 
