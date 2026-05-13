@@ -150,7 +150,7 @@ export class FileDownloader {
 		let https: typeof import('https');
 		try {
 			// eslint-disable-next-line @typescript-eslint/no-require-imports -- Node.js https 模块仅桌面端 Electron 兜底使用，移动端无此模块
-			https = require('https');
+			https = require('https') as typeof import('https');
 		} catch {
 			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
 		}
