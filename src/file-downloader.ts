@@ -149,6 +149,7 @@ export class FileDownloader {
 		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
 		let https: typeof import('https');
 		try {
+			// eslint-disable-next-line @typescript-eslint/no-require-imports
 			https = require('https');
 		} catch {
 			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
@@ -171,20 +172,20 @@ export class FileDownloader {
 
 				const chunks: Buffer[] = [];
 				res.on('data', (chunk: Buffer) => chunks.push(chunk));
-				res.on('end', async () => {
+				res.on('end', () => { void (async () => {
 					try {
 						const buffer = Buffer.concat(chunks);
 						if (buffer.length < 1024) {
 							console.warn(`ima.copilot Sync: Node.js 下载仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js download only ${buffer.length} bytes, may be anti-hotlink error page`);
 						}
 
-						await this.vault.adapter.writeBinary(destPath, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer);
+						await this.vault.adapter.writeBinary(destPath, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
 						console.debug(`ima.copilot Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
 						resolve();
 					} catch (err) {
-						reject(err);
+						reject(err instanceof Error ? err : new Error(String(err)));
 					}
-				});
+				})(); });
 				res.on('error', reject);
 			});
 			req.on('error', reject);

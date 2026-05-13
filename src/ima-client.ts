@@ -14,7 +14,7 @@ let debugAdapter: DataAdapter | null = null;
 /** 初始化日志路径 / Initialize log path */
 export function initDebugLog(plugin: Plugin): void {
 	debugAdapter = plugin.app.vault.adapter;
-	debugLogPath = '.obsidian/plugins/ima-copilot-sync/ima-debug.log';
+	debugLogPath = `${plugin.app.vault.configDir}/plugins/ima-copilot-sync/ima-debug.log`;
 }
 
 /** 更新调试日志开关 / Update debug log enabled state */

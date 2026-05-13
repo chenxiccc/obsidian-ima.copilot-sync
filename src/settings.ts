@@ -163,7 +163,7 @@ export class ImaSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl('h2', { text: 'ima.copilot Sync 设置' });
+		new Setting(containerEl).setName('ima.copilot Sync 设置').setHeading();
 
 		// ── 认证凭证（灰色分组框）/ Credentials (grouped box) ─────────────────
 
@@ -357,7 +357,7 @@ export class ImaSettingTab extends PluginSettingTab {
 				note.textContent = '支持完整同步笔记、网页、微信文章和文件';
 				for (const base of personal) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
-					const checkbox = row.createEl('input') as HTMLInputElement;
+					const checkbox = row.createEl('input');
 					checkbox.type = 'checkbox';
 					checkbox.className = 'ima-kb-checkbox';
 					checkbox.checked = this.plugin.settings.personalKnowledgeBases.some(
@@ -406,10 +406,10 @@ export class ImaSettingTab extends PluginSettingTab {
 							).open();
 						}
 					};
-					checkbox.addEventListener('change', onToggle);
+					checkbox.addEventListener('change', () => void onToggle());
 					label.addEventListener('click', () => {
 						checkbox.checked = !checkbox.checked;
-						onToggle();
+						void onToggle();
 					});
 				}
 			}
@@ -421,7 +421,7 @@ export class ImaSettingTab extends PluginSettingTab {
 				warning.textContent = '⚠ 笔记仅同步约 300 字预览；微信文章短链（如 mp.weixin.qq.com/s/XXXXX）可获取全文，长链（如 mp.weixin.qq.com/s?__biz=...）仅同步摘要（约 300 字正文 + AI 摘要），若希望长链也获取全文，可在微信中打开文章后复制链接，即可获得短链；文件仅同步 AI 摘要，无法下载原件';
 				for (const base of subscribed) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
-					const checkbox = row.createEl('input') as HTMLInputElement;
+					const checkbox = row.createEl('input');
 					checkbox.type = 'checkbox';
 					checkbox.className = 'ima-kb-checkbox';
 					checkbox.checked = this.plugin.settings.publicKnowledgeBases.some(
@@ -484,10 +484,10 @@ export class ImaSettingTab extends PluginSettingTab {
 							).open();
 						}
 					};
-					checkbox.addEventListener('change', onToggle);
+					checkbox.addEventListener('change', () => void onToggle());
 					label.addEventListener('click', () => {
 						checkbox.checked = !checkbox.checked;
-						onToggle();
+						void onToggle();
 					});
 				}
 			}

@@ -73,8 +73,8 @@ export function calcRelativePath(fromDir: string, toPath: string): string {
 		common++;
 	}
 
-	const ups = Array(fromParts.length - common).fill('..');
-	const downs = toParts.slice(common);
+	const ups = Array<string>(fromParts.length - common).fill('..');
+	const downs: string[] = toParts.slice(common);
 	return [...ups, ...downs].join('/') || '.';
 }
 

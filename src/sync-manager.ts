@@ -468,7 +468,7 @@ export class SyncManager {
 
 		for (const file of mdFiles) {
 			const cache = this.app.metadataCache.getFileCache(file);
-			const mediaId = cache?.frontmatter?.media_id;
+			const mediaId = (cache?.frontmatter as Record<string, unknown>)?.['media_id'];
 			if (mediaId) {
 				map.set(String(mediaId), file.path);
 			}
@@ -491,7 +491,7 @@ export class SyncManager {
 
 		for (const file of mdFiles) {
 			const cache = this.app.metadataCache.getFileCache(file);
-			const docid = cache?.frontmatter?.docid;
+			const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
 			if (docid) {
 				map.set(String(docid), file.path);
 			}
@@ -514,7 +514,7 @@ export class SyncManager {
 			const oldContent = await this.vault.read(file);
 			const oldPaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
 			await this.cleanOrphanImages(oldPaths, filePath);
-			await this.vault.delete(file);
+			await this.app.fileManager.trashFile(file);
 			console.debug(`ima.copilot Sync: 删除已移除条目 / Deleted removed item: ${filePath}`);
 		} else if (mode === 'mark-deleted') {
 			if (filePath.includes('[deleted]')) return;
@@ -781,7 +781,7 @@ export class SyncManager {
 			const cleanFilename = sanitizeFilename(filename);
 
 			try {
-				const mediaInfo = await this.client!.getMediaInfo(mediaId);
+				const mediaInfo = await this.client.getMediaInfo(mediaId);
 				const url = mediaInfo.url_info?.url;
 				if (!url) continue;
 
@@ -842,7 +842,7 @@ export class SyncManager {
 				// 若笔记有 docid 且认证客户端可用，重新拉 Markdown 获取新鲜图片 URL（避免 COS 临时链接过期）
 				// If note has docid and auth client is available, re-fetch Markdown for fresh image URLs (avoids expired COS signed URLs)
 				const cache = this.app.metadataCache.getFileCache(file);
-				const docid = cache?.frontmatter?.docid;
+				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
 
 				let fixed = content;
 				if (docid && this.client) {
@@ -954,7 +954,7 @@ export class SyncManager {
 			try {
 				const file = this.vault.getFileByPath(filePath);
 				if (file instanceof TFile) {
-					await this.vault.trash(file, true);
+					await this.app.fileManager.trashFile(file);
 				} else {
 					await this.vault.adapter.remove(filePath);
 				}

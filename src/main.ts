@@ -1,4 +1,4 @@
-import { Plugin, Notice, MarkdownView, normalizePath } from 'obsidian';
+import { Plugin, MarkdownView, normalizePath } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
