@@ -4,6 +4,10 @@
 
 ---
 
+## Install/安装
+
+[https://community.obsidian.md/plugins/ima-copilot-sync](https://community.obsidian.md/plugins/ima-copilot-sync)
+
 ## 中文
 
 将腾讯 [IMA](https://ima.qq.com) 个人笔记和知识库同步到 Obsidian vault 的插件。
@@ -12,9 +16,9 @@
 
 微信公众号内容转发到ima后，自动同步公众号内容到Obsidian
 
-> **⚠ 单向同步**：本插件仅支持 **IMA → Obsidian** 单向同步。在 Obsidian 中对笔记做的任何修改**不会**同步回 IMA，每次同步会用 IMA 服务端内容覆盖本地文件。
-
 ### 功能特性
+
+**⚠ 单向同步**：本插件仅支持 **IMA → Obsidian** 单向同步。在 Obsidian 中对笔记做的任何修改**不会**同步回 IMA，每次同步会用 IMA 服务端内容覆盖本地文件。
 
 - **个人笔记同步**：将 IMA 笔记本中的所有笔记自动下载到 Obsidian
 - **知识库完整同步**：同步知识库中的所有类型条目
@@ -28,17 +32,6 @@
 - **安全凭证存储**：凭证存储于 Obsidian 钥匙串（系统 Keychain），不以明文保存在配置文件中
 - **附件下载控制**：可选下载附件或保留原始链接，支持附件大小限制
 - **知识库删除同步**：支持删除/保留/标记三种模式处理 IMA 端已删除的条目
-
-### 安装方法
-
-方法1：通过Brat安装。
-
-方法2：手动安装：
-
-1. 前往 [Releases](https://github.com/chenxiccc/ima-copilot-sync/releases) 下载最新版本的 `main.js` 和 `manifest.json`
-2. 在 vault 的 `.obsidian/plugins/` 目录下创建 `ima-copilot-sync` 文件夹
-3. 将下载的文件放入该文件夹
-4. 在 Obsidian 设置 → 第三方插件中启用 **ima.copilot Sync**
 
 ### 配置步骤
 
@@ -73,9 +66,9 @@
 | 下载附件     | 是否将图片、PDF 等附件下载到本地（关闭则保留原链接） |
 | 附件大小限制 | 超过限制的附件保留原链接，不下载（0 = 不限制）       |
 
-### 已知限制 
+### 已知限制
 
-- **订阅/公共知识库内容受限**：IMA API 对订阅知识库有访问限制，各类型内容的同步能力如下：
+- **订阅/公共知识库内容受限(个人知识库不受此限制)**：IMA API 对订阅知识库有访问限制，各类型内容的同步能力如下：
   - 笔记：仅同步约 300 字预览，无法获取完整内容
   - 微信文章（长链）：微信服务端对无登录态的请求在路由层拦截，与 UA/headers 无关，无法绕过；仅同步约 300 字正文摘要 + AI 摘要，底部附原文链接
   - 微信文章（短链）：可抓取完整正文
@@ -102,34 +95,26 @@ npm run build
 
 An Obsidian plugin to sync notes from [Tencent IMA](https://ima.qq.com) personal notebook and knowledge base into your Obsidian vault.
 
-> **⚠ One-way sync only**: This plugin syncs **IMA → Obsidian** only. Any edits made in Obsidian will **not** be synced back to IMA — each sync overwrites local files with the content from IMA.
-
 ### Typical Use Cases
 
 Forward WeChat official account articles to IMA, then auto-sync the content to Obsidian.
 
 ### Features
 
+**⚠ One-way sync only**: This plugin syncs **IMA → Obsidian** only. Any edits made in Obsidian will **not** be synced back to IMA — each sync overwrites local files with the content from IMA.
+
 - **Personal notes sync**: Automatically downloads all notes from your IMA notebook
 - **Full knowledge base sync**: Syncs all item types from your IMA knowledge base
-  - **Notes**: Full Slate content converted to Markdown
-  - **Webpages/WeChat articles**: Extracts main content and converts to Markdown
-  - **Files** (PDF, Word, PPT, Excel, etc.): Downloads to local attachment directory
+  - **Notes**: Full content converted to Markdown
+  - **Webpages**: Extracts main content and converts to Markdown
+  - **WeChat articles**: Short-link articles get full content; long-link articles (subscribed/public KB) get ~300 character excerpt + AI summary
+  - **Files** (PDF, Word, PPT, Excel, etc.): Personal/shared KBs can download locally; subscribed/public KBs get AI summary only
 - **Image and file localization**: Downloads inline images and file attachments to a local folder
 - **Incremental sync**: Only fetches notes modified since the last sync
 - **Auto periodic sync**: Runs silently in the background on a configurable interval
 - **Secure credential storage**: Credentials stored in Obsidian keychain (system Keychain), never saved in plaintext
 - **Attachment download control**: Optionally download attachments or keep original links, with size limit support
 - **Knowledge base delete sync**: Three modes (delete/keep/mark) for handling items deleted from IMA
-
-### Installation
-
-Manual installation is required for now:
-
-1. Go to [Releases](https://github.com/chenxiccc/ima-copilot-sync/releases) and download the latest `main.js` and `manifest.json`
-2. Create a folder named `ima-copilot-sync` under your vault's `.obsidian/plugins/` directory
-3. Place the downloaded files into that folder
-4. In Obsidian Settings → Community plugins, enable **ima.copilot Sync**
 
 ### Setup
 
@@ -166,7 +151,7 @@ Click **「测试」** to verify the connection.
 
 ### Known Limitations
 
-- **Subscribed/Public knowledge base content is limited**: IMA API restricts access to subscribed knowledge bases. Sync capabilities by content type:
+- **Subscribed/Public knowledge base content is limited (Personal knowledge base is not affected by this limitation)**: IMA API restricts access to subscribed knowledge bases. Sync capabilities by content type:
   - Notes: Only ~300 character preview, full content not available
   - WeChat articles (long URL): WeChat server blocks requests without login session at the routing layer, independent of UA/headers — cannot bypass; only ~300 character excerpt + AI summary, with original link at the bottom
   - WeChat articles (short URL): Full article content can be fetched
