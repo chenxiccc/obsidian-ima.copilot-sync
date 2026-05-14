@@ -8,6 +8,8 @@ export interface HtmlToMdResult {
 	title: string;
 	/** 作者 / Author */
 	author: string;
+	/** 作者主页 URL / Author profile URL */
+	authorUrl?: string;
 	/** 发布时间（ISO 日期或日期时间字符串）/ Published time (ISO date or datetime string) */
 	published: string;
 	content: string;
@@ -54,6 +56,7 @@ export function convertHtmlToMarkdown(
 	return {
 		title: result.title ?? '',
 		author: result.author ?? '',
+		authorUrl: result.authorUrl,
 		published,
 		content: result.content ?? '',
 	};

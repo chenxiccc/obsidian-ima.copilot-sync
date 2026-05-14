@@ -152,6 +152,32 @@ interface ImaApiResponse<T> {
 	data: T;
 }
 
+// ─── 自定义错误类 / Custom error class ────────────────────────────────────────
+
+/** IMA API 错误，携带业务错误码 / IMA API error with business error code */
+export class ImaApiError extends Error {
+	constructor(
+		public readonly code: number,
+		message: string,
+	) {
+		super(`IMA API 错误 (${code}): ${message}`);
+		this.name = 'ImaApiError';
+	}
+}
+
+/** 格式化错误消息用于用户展示 / Format error message for user display */
+export function formatImaError(err: unknown): string {
+	if (err instanceof ImaApiError && err.code === 200002) {
+		return 'API Key已过期，请到 ima客户端→Claw设置 进行一键续期';
+	}
+	return err instanceof Error ? err.message : String(err);
+}
+
+/** 类型守卫：判断是否为指定错误码的 ImaApiError / Type guard for ImaApiError with optional code match */
+export function isImaApiError(err: unknown, code?: number): err is ImaApiError {
+	return err instanceof ImaApiError && (code === undefined || err.code === code);
+}
+
 // ─── IMA API 客户端 / IMA API client ────────────────────────────────────────
 
 export class ImaClient {
@@ -185,7 +211,7 @@ export class ImaClient {
 		const retcode = result.retcode ?? result.code ?? -1;
 		const errmsg = result.errmsg ?? result.msg ?? 'unknown error';
 		if (retcode !== 0) {
-			throw new Error(`IMA API 错误 (${retcode}): ${errmsg}`);
+			throw new ImaApiError(retcode, errmsg);
 		}
 		return result.data;
 	}

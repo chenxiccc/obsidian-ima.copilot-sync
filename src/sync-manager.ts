@@ -2,7 +2,7 @@ import { App, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
 import type { ImaPluginSettings } from './settings';
 import type { AttachmentOptions } from './image-handler';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
-import { ImaClient, ImaPublicClient } from './ima-client';
+import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
@@ -82,9 +82,8 @@ export class SyncManager {
 			const syncedCount = await this.doSync();
 			new Notice(`ima.copilot Sync: 同步完成，共同步 ${syncedCount} 篇笔记`);
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
 			console.error('ima.copilot Sync error:', err);
-			new Notice(`ima.copilot Sync: 同步失败 — ${msg}`);
+			new Notice(`ima.copilot Sync: 同步失败 — ${formatImaError(err)}`);
 		} finally {
 			this.isSyncing = false;
 		}
@@ -137,9 +136,11 @@ export class SyncManager {
 		await ensureFolder(this.vault, syncFolder);
 
 		let syncedCount = 0;
+			let authExpired = false;
 
 		// ── 同步 IMA 笔记 / Sync IMA notes ──
-		if (this.settings.syncNotes && this.client) {
+		if (this.settings.syncNotes && this.client && !authExpired) {
+			try {
 			// 全量拉取，内存过滤增量（对齐知识库模式，一次请求同时服务增量+删除）
 			// Fetch all notes, filter incrementally in memory (align with KB pattern, one request for both)
 			const allNotes = await this.client.listAllNotes(0);
@@ -176,10 +177,19 @@ export class SyncManager {
 					console.warn(`ima.copilot Sync: 笔记 "${note.title}" 同步失败`, err);
 				}
 			}
+			} catch (err) {
+				if (isImaApiError(err, 200002)) {
+					authExpired = true;
+					new Notice(`ima.copilot Sync: ${formatImaError(err)}`);
+				} else {
+					console.warn('ima.copilot Sync: 个人笔记同步失败', err);
+					new Notice(`ima.copilot Sync: 个人笔记同步失败 — ${formatImaError(err)}`);
+				}
+			}
 		}
 
 		// ── 同步个人知识库（多选）/ Sync personal knowledge bases (multi-select) ──
-		if (this.settings.syncKnowledgeBase && this.client) {
+		if (this.settings.syncKnowledgeBase && this.client && !authExpired) {
 			for (const pkb of this.settings.personalKnowledgeBases) {
 				const kbId = pkb.kbId.trim();
 				if (!kbId) continue;
@@ -220,10 +230,15 @@ export class SyncManager {
 							console.warn(`ima.copilot Sync: 知识库条目 "${item.title}" 同步失败`, err);
 						}
 					}
-				} catch (err) {
-					console.warn(`ima.copilot Sync: 个人知识库 "${pkb.name}" 同步失败`, err);
-					new Notice(`ima.copilot Sync: 个人知识库 "${pkb.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
-				}
+					} catch (err) {
+						if (isImaApiError(err, 200002)) {
+							authExpired = true;
+							new Notice(`ima.copilot Sync: ${formatImaError(err)}`);
+							break;
+						}
+						console.warn(`ima.copilot Sync: 个人知识库 "${pkb.name}" 同步失败`, err);
+						new Notice(`ima.copilot Sync: 个人知识库 "${pkb.name}" 同步失败 — ${formatImaError(err)}`);
+					}
 			}
 		}
 
@@ -235,7 +250,7 @@ export class SyncManager {
 					syncedCount += count;
 				} catch (err) {
 					console.warn(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
-					new Notice(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 同步失败 — ${err instanceof Error ? err.message : String(err)}`);
+					new Notice(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 同步失败 — ${formatImaError(err)}`);
 				}
 			}
 		}
@@ -259,7 +274,7 @@ export class SyncManager {
 	): Promise<number> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const kbCategory = pubKB.kbCategory || '订阅和公共知识库';
-			const kbFolder = normalizePath(`${syncFolder}/${sanitizeFilename(kbCategory)}/${sanitizeFilename(pubKB.name || pubKB.shareId || pubKB.numericKbId)}`);
+		const kbFolder = normalizePath(`${syncFolder}/${sanitizeFilename(kbCategory)}/${sanitizeFilename(pubKB.name || pubKB.shareId || pubKB.numericKbId)}`);
 		await ensureFolder(this.vault, kbFolder);
 
 		// 获取数字 KB ID（若尚未获取）/ Resolve numeric KB ID if not yet available
@@ -274,10 +289,18 @@ export class SyncManager {
 		} else if (!numericKbId && pubKB.encryptedKbId && this.client) {
 			// 订阅知识库：通过私有 API 获取根文件夹 ID，作为 cgi-bin 的 knowledge_base_id
 			// Subscribed KB: get root folder_id via private API, use as knowledge_base_id for cgi-bin
-			const folderId = await this.client.getKbFolderId(pubKB.encryptedKbId);
-			if (folderId) {
-				numericKbId = folderId;
-				pubKB.numericKbId = numericKbId;
+			try {
+				const folderId = await this.client.getKbFolderId(pubKB.encryptedKbId);
+				if (folderId) {
+					numericKbId = folderId;
+					pubKB.numericKbId = numericKbId;
+				}
+			} catch (err) {
+				if (isImaApiError(err, 200002)) {
+					console.warn(`ima.copilot Sync: 订阅知识库 "${pubKB.name}" 跳过（API Key 已过期，无法转换 encryptedKbId）`);
+					return 0;
+				}
+				throw err;
 			}
 		}
 
@@ -425,7 +448,7 @@ export class SyncManager {
 
 		const aiAbstract = item.abstract?.trim() ?? '';
 
-		const frontmatter = this.buildWebFrontmatter(url, author, published, item.media_id);
+		const frontmatter = this.buildWebFrontmatter(url, author, published, item.media_id, undefined);
 		const parts: string[] = [frontmatter, `# ${item.title}\n`];
 
 		if (body) {
@@ -643,7 +666,7 @@ export class SyncManager {
 				contentSelector: isWeChat ? '#js_content' : undefined,
 			});
 
-			const frontmatter = this.buildWebFrontmatter(url, result.author, result.published, mediaId);
+			const frontmatter = this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl);
 
 			const parts: string[] = [frontmatter];
 			const effectiveTitle = result.title || title;
@@ -666,14 +689,20 @@ export class SyncManager {
 	 * 构建网页条目的 YAML frontmatter
 	 * Build YAML frontmatter for web content items
 	 */
-	private buildWebFrontmatter(source: string, author: string, published: string, mediaId: string): string {
+	private buildWebFrontmatter(source: string, author: string, published: string, mediaId: string, authorUrl?: string): string {
 		const lines: string[] = ['---'];
 		lines.push(`source: "${source}"`);
 		lines.push(`media_id: "${mediaId}"`);
 
 		if (author) {
 			lines.push('author:');
-			lines.push(`  - "[[${author}]]"`);
+			if (authorUrl) {
+				// 有 URL → Markdown 链接 / Has URL → Markdown link
+				lines.push(`  - "[${author}](${authorUrl})"`);
+			} else {
+				// 无 URL → 纯文本 / No URL → plain text
+				lines.push(`  - "${author}"`);
+			}
 		}
 
 		if (published) {

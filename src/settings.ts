@@ -1,6 +1,6 @@
 import { App, Modal, normalizePath, PluginSettingTab, Setting, Notice } from 'obsidian';
 import type ImaPlugin from './main';
-import { ImaClient, ImaPublicClient } from './ima-client';
+import { ImaClient, ImaPublicClient, formatImaError } from './ima-client';
 import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
 import { sanitizeFilename } from './path-utils';
 
@@ -277,7 +277,7 @@ export class ImaSettingTab extends PluginSettingTab {
 							const notes = await client.listAllNotes();
 							new Notice(`连接成功，共找到 ${notes.length} 篇笔记`);
 						} catch (err) {
-							new Notice(`连接失败：${err instanceof Error ? err.message : String(err)}`);
+							new Notice(`连接失败：${formatImaError(err)}`);
 						} finally {
 							btn.setDisabled(false);
 							btn.setButtonText('测试');
@@ -524,7 +524,7 @@ export class ImaSettingTab extends PluginSettingTab {
 							btn.setButtonText('收起列表');
 						}
 					} catch (err) {
-						new Notice(`获取知识库失败：${err instanceof Error ? err.message : String(err)}`);
+						new Notice(`获取知识库失败：${formatImaError(err)}`);
 						btn.setButtonText('查看并选择知识库');
 					} finally {
 						btn.setDisabled(false);
