@@ -56,7 +56,8 @@ export function convertHtmlToMarkdown(
 	return {
 		title: result.title ?? '',
 		author: result.author ?? '',
-		authorUrl: result.authorUrl,
+		// authorUrl 来自本地修改版 defuddle，npm 发布版本暂无此字段 / authorUrl from local defuddle fork, not yet in npm release
+		authorUrl: (result as any).authorUrl as string | undefined,
 		published,
 		content: result.content ?? '',
 	};
