@@ -74,7 +74,7 @@ export default class ImaPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			// 启动时处理活跃 leaf（IMA → 强设阅读；非 IMA → 保存状态）
 			// Handle active leaf on startup (IMA → force reading; non-IMA → save state)
-			this.enforceWithRestore(this.app.workspace.activeLeaf);
+			this.enforceWithRestore(this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf ?? null);
 			window.setTimeout(() => void this.syncManager.syncOnce(), 2000);
 		});
 
@@ -108,12 +108,12 @@ export default class ImaPlugin extends Plugin {
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		if (!file.path.startsWith(syncFolder + '/')) return;
 
-		const view = leaf.view as MarkdownView;
+		const view = leaf.view;
 		if (view.getMode() === 'preview') return;
 		// 活跃 leaf 由 active-leaf-change 处理，放行用户手动切换到编辑模式
 		// Active leaf is handled by active-leaf-change; allow manual edit mode switch
-		if (leaf === this.app.workspace.activeLeaf) return;
-		view.setState({ mode: 'preview' }, { history: false });
+		if (leaf.view === this.app.workspace.getActiveViewOfType(MarkdownView)) return;
+		void view.setState({ mode: 'preview' }, { history: false });
 	}
 
 	/**
@@ -124,9 +124,10 @@ export default class ImaPlugin extends Plugin {
 	 */
 	private saveEditorState(view: MarkdownView): void {
 		const mode = view.getMode();
+		const mdState = view.getState() as { mode: string; source?: boolean };
 		this.preImaEditorState = {
 			mode: mode || 'source',
-			source: mode === 'source' ? (view.getState() as any).source : false,
+			source: mode === 'source' ? mdState.source : false,
 		};
 	}
 
@@ -140,15 +141,15 @@ export default class ImaPlugin extends Plugin {
 	 */
 	private captureCurrentEditorState(): void {
 		if (this.isInImaFolder) return;
-		const activeLeaf = this.app.workspace.activeLeaf;
-		if (!activeLeaf?.view || !(activeLeaf.view instanceof MarkdownView)) return;
-		const file = activeLeaf.view.file;
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!activeView) return;
+		const file = activeView.file;
 		if (!file) return;
 
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		if (file.path.startsWith(syncFolder + '/')) return;
 
-		this.saveEditorState(activeLeaf.view as MarkdownView);
+		this.saveEditorState(activeView);
 	}
 
 	/**
@@ -165,13 +166,13 @@ export default class ImaPlugin extends Plugin {
 
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const isImaFile = file.path.startsWith(syncFolder + '/');
-		const view = leaf.view as MarkdownView;
+		const view = leaf.view;
 
 		if (isImaFile) {
 			// 进入 IMA：标记，强制阅读模式 / Entering IMA: mark and force preview
 			this.isInImaFolder = true;
 			if (view.getMode() === 'preview') return;
-			view.setState({ mode: 'preview' }, { history: false });
+			void view.setState({ mode: 'preview' }, { history: false });
 		} else {
 			// 非 IMA 文件 / Non-IMA file
 			if (this.isInImaFolder) {
@@ -181,7 +182,7 @@ export default class ImaPlugin extends Plugin {
 				if (this.preImaEditorState) {
 					const curMode = view.getMode();
 					if (curMode !== this.preImaEditorState.mode) {
-						view.setState({
+						void view.setState({
 							mode: this.preImaEditorState.mode as 'source' | 'preview',
 							source: this.preImaEditorState.source,
 						}, { history: false });
@@ -189,7 +190,7 @@ export default class ImaPlugin extends Plugin {
 				} else if (view.getMode() === 'preview') {
 					// 无保存状态时默认恢复到 Live Preview
 					// Default to Live Preview when no saved state
-					view.setState({ mode: 'source', source: false }, { history: false });
+					void view.setState({ mode: 'source', source: false }, { history: false });
 				}
 				return;
 			}

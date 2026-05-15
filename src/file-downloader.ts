@@ -149,7 +149,7 @@ export class FileDownloader {
 		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
 		let https: typeof import('https');
 		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports -- Node.js https 模块仅桌面端 Electron 兜底使用，移动端无此模块
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-nodejs-modules, no-undef -- Node.js https 模块仅桌面端 Electron 兜底使用，移动端无此模块
 			https = require('https') as typeof import('https');
 		} catch {
 			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
@@ -170,11 +170,14 @@ export class FileDownloader {
 					return;
 				}
 
+				// eslint-disable-next-line no-undef -- Buffer 来自 Node.js 环境，桌面端 Electron 可用
 				const chunks: Buffer[] = [];
+				// eslint-disable-next-line no-undef -- Buffer 来自 Node.js 环境，桌面端 Electron 可用
 				res.on('data', (chunk: Buffer) => chunks.push(chunk));
 				res.on('end', () => { void (async () => {
 					try {
-						const buffer = Buffer.concat(chunks);
+						// eslint-disable-next-line no-undef -- Buffer 来自 Node.js 环境
+					const buffer = Buffer.concat(chunks);
 						if (buffer.length < 1024) {
 							console.warn(`ima.copilot Sync: Node.js 下载仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js download only ${buffer.length} bytes, may be anti-hotlink error page`);
 						}

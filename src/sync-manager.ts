@@ -46,7 +46,7 @@ export class SyncManager {
 
 	async syncOnce(): Promise<void> {
 		if (this.isSyncing) {
-			new Notice('ima.copilot Sync: 同步正在进行中，请稍候');
+			new Notice('ima.copilot sync: 同步正在进行中，请稍候');
 			return;
 		}
 
@@ -67,16 +67,16 @@ export class SyncManager {
 		);
 		const hasPublicWork = this.settings.publicKnowledgeBases.length > 0;
 		if ((hasPrivateWork || hasSubscribedKBNeedingConversion) && !hasCredentials) {
-			new Notice('ima.copilot Sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
+			new Notice('ima.copilot sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
 			return;
 		}
 		if (!hasPrivateWork && !hasPublicWork) {
-			new Notice('ima.copilot Sync: 没有可执行的同步任务');
+			new Notice('ima.copilot sync: 没有可执行的同步任务');
 			return;
 		}
 
 		this.isSyncing = true;
-		new Notice('ima.copilot Sync: 开始同步…');
+		new Notice('ima.copilot sync: 开始同步…');
 
 		try {
 			const syncedCount = await this.doSync();

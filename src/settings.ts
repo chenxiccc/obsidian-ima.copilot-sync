@@ -40,7 +40,7 @@ export interface ImaPluginSettings {
 	syncFolder: string;
 	/** 自动同步间隔（分钟）/ Auto sync interval in minutes */
 	syncIntervalMinutes: number;
-	/** 是否同步 IMA 笔记 / Whether to sync IMA notes */
+	/** 是否同步 ima 笔记 / Whether to sync ima notes */
 	syncNotes: boolean;
 	/** 是否同步知识库 / Whether to sync knowledge base */
 	syncKnowledgeBase: boolean;
@@ -71,7 +71,7 @@ export interface ImaPluginSettings {
 	fileSizeLimitUnit: AttachmentSizeUnit;
 	/** 公共/订阅知识库列表 / Public/subscribed KB list */
 	publicKnowledgeBases: PublicKnowledgeBase[];
-	/** IMA 文件强制阅读模式 / Force reading mode for IMA files */
+	/** ima 文件强制阅读模式 / Force reading mode for ima files */
 	forceReadingMode: boolean;
 }
 
@@ -230,7 +230,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(credBox)
 			.setName('Client ID')
-			.setDesc('IMA OpenAPI 的 Client ID（安全存储于 Obsidian 钥匙串）')
+			.setDesc('ima OpenAPI 的 Client ID（安全存储于 Obsidian 钥匙串）')
 			.addText(text => {
 				text
 					.setPlaceholder('输入 Client ID')
@@ -243,7 +243,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(credBox)
 			.setName('API Key')
-			.setDesc('IMA OpenAPI 的 API Key（安全存储于 Obsidian 钥匙串）')
+			.setDesc('ima OpenAPI 的 API Key（安全存储于 Obsidian 钥匙串）')
 			.addText(text => {
 				text
 					.setPlaceholder('输入 API Key')
@@ -288,8 +288,8 @@ export class ImaSettingTab extends PluginSettingTab {
 		// ── 同步内容选择 / Sync content selection ──────────────────────────────
 
 		new Setting(containerEl)
-			.setName('同步 IMA 笔记')
-			.setDesc('同步 IMA 个人笔记本中的笔记')
+			.setName('同步 ima 笔记')
+			.setDesc('同步 ima 个人笔记本中的笔记')
 			.addToggle(toggle =>
 				toggle
 					.setValue(this.plugin.settings.syncNotes)
@@ -638,11 +638,11 @@ export class ImaSettingTab extends PluginSettingTab {
 		};
 		renderPublicKbList();
 
-		// ── IMA 删除同步 / IMA delete sync ──────────────────────────────────
+		// ── ima 删除同步 / ima delete sync ──────────────────────────────────
 
 		new Setting(containerEl)
-			.setName('IMA 删除同步')
-			.setDesc('IMA 笔记或知识库中删除条目后，本地文件的处理方式')
+			.setName('ima 删除同步')
+			.setDesc('ima 笔记或知识库中删除条目后，本地文件的处理方式')
 			.addDropdown(drop => {
 				drop
 					.addOption('delete', '删除本地文件')
@@ -742,7 +742,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('强制阅读模式')
-			.setDesc('IMA 同步文件默认以阅读模式打开，防止误编辑被同步覆盖')
+			.setDesc('ima 同步文件默认以阅读模式打开，防止误编辑被同步覆盖')
 			.addToggle(toggle =>
 				toggle
 					.setValue(this.plugin.settings.forceReadingMode)

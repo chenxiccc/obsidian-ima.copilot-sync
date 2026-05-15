@@ -1,6 +1,6 @@
 {
 	"name": "ima-copilot-sync",
-	"version": "4.2.3",
+	"version": "4.3.0",
 	"description": "Sync notes from IMA personal knowledge base to Obsidian",
 	"main": "main.js",
 	"type": "module",
@@ -11,10 +11,15 @@
 	"keywords": [],
 	"license": "MIT",
 	"devDependencies": {
-		"@types/node": "^16.11.6",
+		"@types/node": "^16.18.126",
 		"esbuild": "0.25.5",
+		"eslint": "^9.39.4",
+		"eslint-plugin-obsidianmd": "^0.3.0",
+		"globals": "^17.6.0",
+		"jiti": "^2.7.0",
 		"tslib": "2.4.0",
-		"typescript": "^5.8.3"
+		"typescript": "^5.8.3",
+		"typescript-eslint": "^8.59.3"
 	},
 	"dependencies": {
 		"defuddle": "^0.18.1",
