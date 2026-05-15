@@ -88,7 +88,6 @@ export class FileDownloader {
 	): Promise<void> {
 		// 合并请求头：API 返回的 headers + 反盗链头 / Merge headers: API headers + anti-hotlink headers
 		const mergedHeaders: Record<string, string> = {
-			// eslint-disable-next-line obsidianmd/platform
 			'User-Agent': navigator.userAgent,
 			'Accept': '*/*',
 			...extraHeaders,

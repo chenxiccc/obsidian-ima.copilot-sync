@@ -91,7 +91,6 @@ export async function exceedsSizeLimit(url: string, limitBytes: number, extraHea
 		const response = await requestUrl({
 			url,
 			method: 'HEAD',
-			// eslint-disable-next-line obsidianmd/platform
 			headers: { 'User-Agent': navigator.userAgent, ...extraHeaders },
 			throw: false,
 		});

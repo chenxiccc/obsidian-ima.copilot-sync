@@ -344,7 +344,6 @@ export class ImageHandler {
 		}
 
 		const headers: Record<string, string> = {
-			// eslint-disable-next-line obsidianmd/platform
 			'User-Agent': navigator.userAgent,
 			'Accept': '*/*',
 		};
@@ -363,7 +362,6 @@ export class ImageHandler {
 			url,
 			method: 'GET',
 			headers: {
-				// eslint-disable-next-line obsidianmd/platform
 				'User-Agent': navigator.userAgent,
 			},
 			throw: false,

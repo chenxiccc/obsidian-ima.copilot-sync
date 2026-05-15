@@ -645,7 +645,6 @@ export class SyncManager {
 	): Promise<string> {
 		try {
 			const requestHeaders: Record<string, string> = {
-				// eslint-disable-next-line obsidianmd/platform
 				'User-Agent': navigator.userAgent,
 				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				...headers,

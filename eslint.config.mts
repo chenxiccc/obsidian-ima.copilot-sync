@@ -27,6 +27,9 @@ export default tseslint.config(
 			// 关闭 sentence case 规则——插件 UI 含大量专有名词（API/ID/ima）和中文，不适用英文 sentence case
 			// Disable sentence case — plugin UI has proper nouns (API/ID/ima) and Chinese text
 			"obsidianmd/ui/sentence-case": "off",
+			// navigator.userAgent 用于获取真实浏览器 UA 反盗链，非平台检测，需全局关闭此规则
+			// navigator.userAgent is used for real browser UA anti-hotlink, not platform detection
+			"obsidianmd/platform": "off",
 			// 桌面端 Electron 环境下需通过 require('https') 进行反盗链图片下载回退，移动端不会触发此路径
 			// Node.js https fallback for anti-hotlink image download in desktop Electron; never triggered on mobile
 			"import/no-nodejs-modules": "off",
