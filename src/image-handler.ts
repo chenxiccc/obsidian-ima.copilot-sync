@@ -3,7 +3,6 @@ import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
 import {
 	escapePathForMarkdown,
-	CHROME_UA,
 	sanitizeFilename,
 	buildStableFilename,
 	resolveAttachmentFolder,
@@ -56,6 +55,8 @@ export interface AttachmentOptions {
 	kbName?: string;
 	/** 知识库分类（个人知识库/共享知识库/订阅和公共知识库）/ KB category */
 	kbCategory?: string;
+	/** 防盗链图片下载增强（Node.js https 回退，仅桌面端）/ Anti-hotlink enhanced (Node.js https fallback, desktop only) */
+	antiHotlinkEnhanced: boolean;
 }
 
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────
@@ -136,7 +137,7 @@ export class ImageHandler {
 
 				const exists = await this.vault.adapter.exists(destPath);
 				if (!exists) {
-					await this.downloadImage(url, destPath);
+					await this.downloadImage(url, destPath, opts.antiHotlinkEnhanced);
 				}
 
 				const link = this.formatLink(filename, destPath, noteFilePath, alt, opts.linkFormat);
@@ -185,6 +186,7 @@ export class ImageHandler {
 					noteFilePath,
 					opts,
 					isImage: false,
+					antiHotlinkEnhanced: opts.antiHotlinkEnhanced,
 				});
 
 				if (result.linkText) {
@@ -281,7 +283,7 @@ export class ImageHandler {
 
 		const exists = await this.vault.adapter.exists(destPath);
 		if (!exists) {
-			await this.downloadImage(url, destPath);
+			await this.downloadImage(url, destPath, opts.antiHotlinkEnhanced);
 		}
 
 		return this.formatLink(filename, destPath, noteFilePath, '', opts.linkFormat);
@@ -323,15 +325,46 @@ export class ImageHandler {
 	}
 
 	/** 下载图片并写入 vault / Download image and write to vault */
-	private async downloadImage(url: string, destPath: string): Promise<void> {
+	private async downloadImage(url: string, destPath: string, antiHotlinkEnhanced = false): Promise<void> {
 		console.debug(`ima.copilot Sync: 开始下载图片 / Downloading image: ${url.substring(0, 100)}...`);
+
+		// 先尝试 requestUrl / Try requestUrl first
+		try {
+			await this.downloadViaRequestUrl(url, destPath);
+			return;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.warn(`ima.copilot Sync: requestUrl 图片下载失败 / requestUrl image download failed: ${msg}`);
+		}
+
+		// 防盗链增强回退：Node.js https.get（仅桌面端）
+		// Anti-hotlink enhanced fallback: Node.js https.get (desktop only)
+		if (!antiHotlinkEnhanced || !this.fileDownloader) {
+			throw new Error('图片下载失败 / Image download failed');
+		}
+
+		const headers: Record<string, string> = {
+			// eslint-disable-next-line obsidianmd/platform
+			'User-Agent': navigator.userAgent,
+			'Accept': '*/*',
+		};
+
+		try {
+			await this.fileDownloader.downloadViaNodeHttps(url, destPath, headers);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`图片下载失败（Node.js 回退）/ Image download failed (Node.js fallback): ${msg}`);
+		}
+	}
+
+	/** 通过 requestUrl 下载图片 / Download image via requestUrl */
+	private async downloadViaRequestUrl(url: string, destPath: string): Promise<void> {
 		const response = await requestUrl({
 			url,
 			method: 'GET',
 			headers: {
-				// 伪造浏览器 User-Agent 以规避部分 CDN 限制
-				// Fake browser User-Agent to bypass some CDN restrictions
-				'User-Agent': CHROME_UA,
+				// eslint-disable-next-line obsidianmd/platform
+				'User-Agent': navigator.userAgent,
 			},
 			throw: false,
 		});

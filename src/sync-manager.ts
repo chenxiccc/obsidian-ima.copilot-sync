@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
+import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -115,6 +115,7 @@ export class SyncManager {
 			fileSizeLimitBytes: this.calcSizeLimitBytes(this.settings.fileSizeLimit, this.settings.fileSizeLimitUnit),
 			kbName,
 			kbCategory,
+			antiHotlinkEnhanced: this.settings.antiHotlinkEnhanced,
 		};
 	}
 
@@ -644,7 +645,8 @@ export class SyncManager {
 	): Promise<string> {
 		try {
 			const requestHeaders: Record<string, string> = {
-				'User-Agent': CHROME_UA,
+				// eslint-disable-next-line obsidianmd/platform
+				'User-Agent': navigator.userAgent,
 				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				...headers,
 			};
@@ -768,6 +770,7 @@ export class SyncManager {
 				noteFilePath: filePath,
 				opts,
 				isImage,
+				antiHotlinkEnhanced: opts.antiHotlinkEnhanced,
 			});
 
 			if (isImage) {
@@ -820,6 +823,7 @@ export class SyncManager {
 					noteFilePath,
 					opts,
 					isImage: false,
+					antiHotlinkEnhanced: opts.antiHotlinkEnhanced,
 				});
 
 				if (download.linkText) {

@@ -2,7 +2,6 @@ import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
 import {
 	escapePathForMarkdown,
-	CHROME_UA,
 	sanitizeFilename,
 	resolveAttachmentFolder,
 	calcRelativePath,
@@ -42,8 +41,10 @@ export class FileDownloader {
 		opts: AttachmentOptions;
 		/** 是否为图片（图片用图片链接语法）/ Whether the file is an image (use image link syntax) */
 		isImage?: boolean;
+		/** 防盗链增强（Node.js https 回退）/ Anti-hotlink enhanced (Node.js https fallback) */
+		antiHotlinkEnhanced?: boolean;
 	}): Promise<DownloadResult> {
-		const { url, headers, filename, noteFilePath, opts, isImage = false } = params;
+		const { url, headers, filename, noteFilePath, opts, isImage = false, antiHotlinkEnhanced = false } = params;
 
 		// 大小限制检查 / Size limit check
 		const sizeLimitBytes = isImage ? opts.imageSizeLimitBytes : opts.fileSizeLimitBytes;
@@ -65,7 +66,7 @@ export class FileDownloader {
 		// 已存在则跳过下载 / Skip download if file already exists
 		const exists = await this.vault.adapter.exists(destPath);
 		if (!exists) {
-			await this.downloadWithAntiHotlink(url, destPath, headers);
+			await this.downloadWithAntiHotlink(url, destPath, headers, antiHotlinkEnhanced);
 		}
 
 		const linkText = isImage
@@ -83,10 +84,12 @@ export class FileDownloader {
 		url: string,
 		destPath: string,
 		extraHeaders?: Record<string, string>,
+		antiHotlinkEnhanced = false,
 	): Promise<void> {
 		// 合并请求头：API 返回的 headers + 反盗链头 / Merge headers: API headers + anti-hotlink headers
 		const mergedHeaders: Record<string, string> = {
-			'User-Agent': CHROME_UA,
+			// eslint-disable-next-line obsidianmd/platform
+			'User-Agent': navigator.userAgent,
 			'Accept': '*/*',
 			...extraHeaders,
 		};
@@ -96,11 +99,15 @@ export class FileDownloader {
 			return;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`ima.copilot Sync: requestUrl 下载失败，尝试 Node.js fallback / requestUrl download failed, trying Node.js fallback: ${msg}`);
+			console.warn(`ima.copilot Sync: requestUrl 下载失败 / requestUrl download failed: ${msg}`);
 		}
 
-		// 兜底：Node.js https.get（仅桌面端 Electron 环境）
-		// Fallback: Node.js https.get (desktop Electron environment only)
+		// 仅当防盗链增强开启时使用 Node.js https 回退（仅桌面端可用）
+		// Only use Node.js https fallback when anti-hotlink is enhanced (desktop only)
+		if (!antiHotlinkEnhanced) {
+			throw new Error(`文件下载失败 / File download failed: requestUrl failed and anti-hotlink enhanced is disabled`);
+		}
+
 		try {
 			await this.downloadViaNodeHttps(url, destPath, mergedHeaders);
 		} catch (err) {
@@ -140,7 +147,7 @@ export class FileDownloader {
 	}
 
 	/** 通过 Node.js https.get 下载（桌面端兜底）/ Download via Node.js https.get (desktop fallback) */
-	private async downloadViaNodeHttps(
+	public async downloadViaNodeHttps(
 		url: string,
 		destPath: string,
 		headers: Record<string, string>,
@@ -149,7 +156,7 @@ export class FileDownloader {
 		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
 		let https: typeof import('https');
 		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-nodejs-modules, no-undef -- Node.js https 模块仅桌面端 Electron 兜底使用，移动端无此模块
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef -- Node.js https 模块仅桌面端 Electron 兜底使用，移动端无此模块
 			https = require('https') as typeof import('https');
 		} catch {
 			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');

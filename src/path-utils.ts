@@ -2,11 +2,6 @@ import { Vault, normalizePath, requestUrl } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
 import type { LinkFormat } from './settings';
 
-// ─── 共享常量 / Shared constants ─────────────────────────────────────────────
-
-/** Chrome UA 字符串，用于反盗链伪装 / Chrome UA string for anti-hotlink spoofing */
-export const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
 // ─── 文件名清理 / Filename sanitization ──────────────────────────────────────
 
 /** 清理文件名中的非法字符 / Sanitize illegal characters in filename */
@@ -96,7 +91,8 @@ export async function exceedsSizeLimit(url: string, limitBytes: number, extraHea
 		const response = await requestUrl({
 			url,
 			method: 'HEAD',
-			headers: { 'User-Agent': CHROME_UA, ...extraHeaders },
+			// eslint-disable-next-line obsidianmd/platform
+			headers: { 'User-Agent': navigator.userAgent, ...extraHeaders },
 			throw: false,
 		});
 		const contentLength = response.headers?.['content-length'];

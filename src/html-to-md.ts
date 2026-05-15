@@ -56,9 +56,7 @@ export function convertHtmlToMarkdown(
 	return {
 		title: result.title ?? '',
 		author: result.author ?? '',
-		// authorUrl 来自本地修改版 defuddle，npm 发布版本暂无此字段 / authorUrl from local defuddle fork, not yet in npm release
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access -- authorUrl 来自本地修改版 defuddle，npm 发布版本暂无此字段
-		authorUrl: (result as any).authorUrl as string | undefined,
+		authorUrl: result.authorUrl,
 		published,
 		content: result.content ?? '',
 	};
