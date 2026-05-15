@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, normalizePath } from 'obsidian';
+import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
@@ -8,7 +8,10 @@ import { initDebugLog, setDebugLogEnabled } from './ima-client';
 export default class ImaPlugin extends Plugin {
 	settings: ImaPluginSettings = { ...DEFAULT_SETTINGS };
 	private syncManager!: SyncManager;
-
+	/** 进入 IMA 文件夹前用户的编辑器状态（用于切出时恢复） / User's editor state before entering IMA */
+	private preImaEditorState: { mode: string; source: boolean | undefined } | null = null;
+	/** 当前活跃 leaf 是否在 IMA 文件夹内 / Whether the active leaf is currently inside an IMA file */
+	private isInImaFolder = false;
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
@@ -44,34 +47,34 @@ export default class ImaPlugin extends Plugin {
 		this.addSettingTab(new ImaSettingTab(this.app, this));
 
 		// ── IMA 文件强制阅读模式 / Force reading mode for IMA files ────────
+		// active-leaf-change：用户主动切换标签页，包含状态保存/恢复
 		this.registerEvent(
 			this.app.workspace.on('active-leaf-change', (leaf) => {
-				if (!this.settings.forceReadingMode) return;
-				if (!leaf?.view || !(leaf.view instanceof MarkdownView)) return;
-				const file = leaf.view.file;
-				if (!file) return;
+				this.enforceWithRestore(leaf);
+			}),
+		);
 
-				const syncFolder = normalizePath(this.settings.syncFolder);
-				const isImaFile = file.path.startsWith(syncFolder + '/');
-				const state = leaf.getViewState();
-
-				if (isImaFile) {
-					// IMA 文件：强制阅读模式 / IMA file: force reading mode
-					if (state.state?.mode === 'preview') return;
-					state.state = { ...state.state, mode: 'preview', source: false };
-					void leaf.setViewState(state);
-				} else if (state.state?.mode === 'preview' && state.state?.source === false) {
-					// 非 IMA 文件：恢复编辑模式（仅当之前被强制切到阅读模式时）
-					// Non-IMA file: restore editing mode (only if we forced preview earlier)
-					state.state = { ...state.state, mode: 'source', source: false };
-					void leaf.setViewState(state);
-				}
+		// layout-change：分屏/布局变化 + 捕获用户在文件内切换视图模式
+		// layout-change: split/layout changes + capture in-file view mode switches
+		this.registerEvent(
+			this.app.workspace.on('layout-change', () => {
+				this.app.workspace.getLeavesOfType('markdown').forEach((leaf) => {
+					this.enforceImaPreviewOnly(leaf);
+				});
+				// 用户在非 IMA 文件内通过按钮/Ctrl+E 切换视图模式时，
+				// 不会触发 active-leaf-change，在此补捕获
+				// When user switches view mode within a non-IMA file via button/Ctrl+E,
+				// active-leaf-change doesn't fire; capture it here
+				this.captureCurrentEditorState();
 			}),
 		);
 
 		// ── 启动时同步（等待 workspace 准备完毕后延迟 2 秒，避免阻塞启动）
 		// ── Sync on startup (delay 2s after workspace ready to avoid blocking startup)
 		this.app.workspace.onLayoutReady(() => {
+			// 启动时处理活跃 leaf（IMA → 强设阅读；非 IMA → 保存状态）
+			// Handle active leaf on startup (IMA → force reading; non-IMA → save state)
+			this.enforceWithRestore(this.app.workspace.activeLeaf);
 			window.setTimeout(() => void this.syncManager.syncOnce(), 2000);
 		});
 
@@ -88,6 +91,112 @@ export default class ImaPlugin extends Plugin {
 	onunload(): void {
 		// Obsidian 自动清理 registerInterval 注册的定时器
 		// Obsidian automatically cleans up intervals registered via registerInterval
+	}
+
+	/**
+	 * 仅强制 IMA 文件为阅读模式，不涉及状态保存/恢复。
+	 * 供 layout-change 全量扫描使用。
+	 * Only forces IMA files to preview mode; no state save/restore.
+	 * Used by layout-change for bulk scanning.
+	 */
+	private enforceImaPreviewOnly(leaf: WorkspaceLeaf): void {
+		if (!this.settings.forceReadingMode) return;
+		if (!leaf?.view || !(leaf.view instanceof MarkdownView)) return;
+		const file = leaf.view.file;
+		if (!file) return;
+
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		if (!file.path.startsWith(syncFolder + '/')) return;
+
+		const view = leaf.view as MarkdownView;
+		if (view.getMode() === 'preview') return;
+		// 活跃 leaf 由 active-leaf-change 处理，放行用户手动切换到编辑模式
+		// Active leaf is handled by active-leaf-change; allow manual edit mode switch
+		if (leaf === this.app.workspace.activeLeaf) return;
+		view.setState({ mode: 'preview' }, { history: false });
+	}
+
+	/**
+	 * 保存 MarkdownView 的编辑器状态到 preImaEditorState。
+	 * 抽取公共逻辑供 captureCurrentEditorState 和 enforceWithRestore 复用。
+	 * Save MarkdownView editor state to preImaEditorState.
+	 * Shared helper for captureCurrentEditorState and enforceWithRestore.
+	 */
+	private saveEditorState(view: MarkdownView): void {
+		const mode = view.getMode();
+		this.preImaEditorState = {
+			mode: mode || 'source',
+			source: mode === 'source' ? (view.getState() as any).source : false,
+		};
+	}
+
+	/**
+	 * 捕获当前活跃 leaf 的编辑器状态（仅限非 IMA 文件）。
+	 * 用于在 layout-change 和启动时补捕获视图模式切换，
+	 * 解决 Ctrl+E/工具栏按钮切换模式不触发 active-leaf-change 的问题。
+	 * Captures current active leaf editor state (non-IMA files only).
+	 * Supplements active-leaf-change by catching in-file mode switches
+	 * (Ctrl+E / toolbar button) which don't fire active-leaf-change.
+	 */
+	private captureCurrentEditorState(): void {
+		if (this.isInImaFolder) return;
+		const activeLeaf = this.app.workspace.activeLeaf;
+		if (!activeLeaf?.view || !(activeLeaf.view instanceof MarkdownView)) return;
+		const file = activeLeaf.view.file;
+		if (!file) return;
+
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		if (file.path.startsWith(syncFolder + '/')) return;
+
+		this.saveEditorState(activeLeaf.view as MarkdownView);
+	}
+
+	/**
+	 * 用户主动切换标签页时调用：包含强制阅读 + 状态保存/恢复。
+	 * 供 active-leaf-change 使用。
+	 * Called when user actively switches tabs: force reading mode + state save/restore.
+	 * Used by active-leaf-change.
+	 */
+	private enforceWithRestore(leaf: WorkspaceLeaf | null): void {
+		if (!this.settings.forceReadingMode) return;
+		if (!leaf?.view || !(leaf.view instanceof MarkdownView)) return;
+		const file = leaf.view.file;
+		if (!file) return;
+
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		const isImaFile = file.path.startsWith(syncFolder + '/');
+		const view = leaf.view as MarkdownView;
+
+		if (isImaFile) {
+			// 进入 IMA：标记，强制阅读模式 / Entering IMA: mark and force preview
+			this.isInImaFolder = true;
+			if (view.getMode() === 'preview') return;
+			view.setState({ mode: 'preview' }, { history: false });
+		} else {
+			// 非 IMA 文件 / Non-IMA file
+			if (this.isInImaFolder) {
+				// 刚从 IMA 切出来，恢复到进入 IMA 前的状态
+				// Just left IMA: restore to pre-IMA state
+				this.isInImaFolder = false;
+				if (this.preImaEditorState) {
+					const curMode = view.getMode();
+					if (curMode !== this.preImaEditorState.mode) {
+						view.setState({
+							mode: this.preImaEditorState.mode as 'source' | 'preview',
+							source: this.preImaEditorState.source,
+						}, { history: false });
+					}
+				} else if (view.getMode() === 'preview') {
+					// 无保存状态时默认恢复到 Live Preview
+					// Default to Live Preview when no saved state
+					view.setState({ mode: 'source', source: false }, { history: false });
+				}
+				return;
+			}
+			// 自由浏览非 IMA 文件时，保存当前状态作为下次进入 IMA 的恢复目标
+			// Freely browsing non-IMA files: save current state as the restore target
+			this.saveEditorState(view);
+		}
 	}
 
 	async loadSettings(): Promise<void> {
