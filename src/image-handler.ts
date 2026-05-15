@@ -2,6 +2,7 @@ import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
 import {
+	getUserAgent,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	buildStableFilename,
@@ -344,7 +345,7 @@ export class ImageHandler {
 		}
 
 		const headers: Record<string, string> = {
-			'User-Agent': navigator.userAgent,
+			'User-Agent': getUserAgent(),
 			'Accept': '*/*',
 		};
 
@@ -362,7 +363,7 @@ export class ImageHandler {
 			url,
 			method: 'GET',
 			headers: {
-				'User-Agent': navigator.userAgent,
+				'User-Agent': getUserAgent(),
 			},
 			throw: false,
 		});

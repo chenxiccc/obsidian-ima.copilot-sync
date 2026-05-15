@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
+import { getUserAgent, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -645,7 +645,7 @@ export class SyncManager {
 	): Promise<string> {
 		try {
 			const requestHeaders: Record<string, string> = {
-				'User-Agent': navigator.userAgent,
+				'User-Agent': getUserAgent(),
 				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				...headers,
 			};

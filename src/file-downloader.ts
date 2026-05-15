@@ -1,6 +1,7 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
 import {
+	getUserAgent,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	resolveAttachmentFolder,
@@ -88,7 +89,7 @@ export class FileDownloader {
 	): Promise<void> {
 		// 合并请求头：API 返回的 headers + 反盗链头 / Merge headers: API headers + anti-hotlink headers
 		const mergedHeaders: Record<string, string> = {
-			'User-Agent': navigator.userAgent,
+			'User-Agent': getUserAgent(),
 			'Accept': '*/*',
 			...extraHeaders,
 		};

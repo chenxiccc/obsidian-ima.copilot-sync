@@ -83,6 +83,18 @@ export async function ensureFolder(vault: Vault, folderPath: string): Promise<vo
 }
 
 /**
+ * 获取当前环境的 User-Agent 字符串，用于 HTTP 请求反盗链
+ * Get the current environment's User-Agent string for anti-hotlink HTTP requests
+ *
+ * 复用 Obsidian/Electron 的真实 UA，Obsidian 升级时 UA 自动跟随。
+ * Reuses Obsidian/Electron's real UA so it follows Obsidian upgrades automatically.
+ */
+export function getUserAgent(): string {
+	// eslint-disable-next-line obsidianmd/platform -- 非平台检测，仅用于 HTTP 请求头 / Not platform detection, just for HTTP headers
+	return navigator.userAgent;
+}
+
+/**
  * HEAD 请求检查附件是否超过大小限制
  * HEAD request to check if attachment exceeds size limit
  */
@@ -91,7 +103,7 @@ export async function exceedsSizeLimit(url: string, limitBytes: number, extraHea
 		const response = await requestUrl({
 			url,
 			method: 'HEAD',
-			headers: { 'User-Agent': navigator.userAgent, ...extraHeaders },
+			headers: { 'User-Agent': getUserAgent(), ...extraHeaders },
 			throw: false,
 		});
 		const contentLength = response.headers?.['content-length'];
