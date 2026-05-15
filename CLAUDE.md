@@ -2,6 +2,8 @@
 
 将 IMA 个人知识库笔记同步到 Obsidian vault 的插件。
 
+> **注意**：本文件在 `.gitignore` 中，不要删除该忽略规则。此文件仅用于本地 AI 辅助开发，不应提交到仓库。
+
 ## IMA skills
 
 '/Users/admin/Documents/Tech/project/ima skills/ima-skill'
