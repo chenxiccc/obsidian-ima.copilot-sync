@@ -2,7 +2,7 @@ import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
 import {
-	getUserAgent,
+	CHROME_UA,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	buildStableFilename,
@@ -345,7 +345,7 @@ export class ImageHandler {
 		}
 
 		const headers: Record<string, string> = {
-			'User-Agent': getUserAgent(),
+			'User-Agent': CHROME_UA,
 			'Accept': '*/*',
 		};
 
@@ -359,12 +359,10 @@ export class ImageHandler {
 
 	/** 通过 requestUrl 下载图片 / Download image via requestUrl */
 	private async downloadViaRequestUrl(url: string, destPath: string): Promise<void> {
+		// requestUrl 自带 UA，无需显式设置 / requestUrl adds its own UA, no need to set explicitly
 		const response = await requestUrl({
 			url,
 			method: 'GET',
-			headers: {
-				'User-Agent': getUserAgent(),
-			},
 			throw: false,
 		});
 

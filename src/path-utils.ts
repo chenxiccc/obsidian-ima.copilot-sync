@@ -83,16 +83,13 @@ export async function ensureFolder(vault: Vault, folderPath: string): Promise<vo
 }
 
 /**
- * 获取当前环境的 User-Agent 字符串，用于 HTTP 请求反盗链
- * Get the current environment's User-Agent string for anti-hotlink HTTP requests
+ * Chrome UA，仅用于 Node.js https.get 兜底反盗链下载（requestUrl 自带 UA，无需显式设置）
+ * Chrome UA for Node.js https.get anti-hotlink fallback only (requestUrl handles its own UA)
  *
- * 复用 Obsidian/Electron 的真实 UA，Obsidian 升级时 UA 自动跟随。
- * Reuses Obsidian/Electron's real UA so it follows Obsidian upgrades automatically.
+ * 使用标准 Chrome 134 macOS UA，格式与真实 Chrome 完全一致。
+ * Uses standard Chrome 134 macOS UA, format identical to real Chrome.
  */
-export function getUserAgent(): string {
-	// eslint-disable-next-line obsidianmd/platform -- 非平台检测，仅用于 HTTP 请求头 / Not platform detection, just for HTTP headers
-	return navigator.userAgent;
-}
+export const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
 
 /**
  * HEAD 请求检查附件是否超过大小限制
@@ -103,7 +100,7 @@ export async function exceedsSizeLimit(url: string, limitBytes: number, extraHea
 		const response = await requestUrl({
 			url,
 			method: 'HEAD',
-			headers: { 'User-Agent': getUserAgent(), ...extraHeaders },
+			headers: extraHeaders,
 			throw: false,
 		});
 		const contentLength = response.headers?.['content-length'];

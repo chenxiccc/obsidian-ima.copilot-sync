@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { getUserAgent, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
+import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -644,8 +644,8 @@ export class SyncManager {
 		mediaId: string,
 	): Promise<string> {
 		try {
+			// requestUrl 自带 UA，无需显式设置 / requestUrl adds its own UA, no need to set explicitly
 			const requestHeaders: Record<string, string> = {
-				'User-Agent': getUserAgent(),
 				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				...headers,
 			};

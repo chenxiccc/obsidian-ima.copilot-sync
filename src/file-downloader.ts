@@ -1,7 +1,7 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { AttachmentOptions } from './image-handler';
 import {
-	getUserAgent,
+	CHROME_UA,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	resolveAttachmentFolder,
@@ -87,15 +87,15 @@ export class FileDownloader {
 		extraHeaders?: Record<string, string>,
 		antiHotlinkEnhanced = false,
 	): Promise<void> {
-		// 合并请求头：API 返回的 headers + 反盗链头 / Merge headers: API headers + anti-hotlink headers
-		const mergedHeaders: Record<string, string> = {
-			'User-Agent': getUserAgent(),
+		// 基础请求头：requestUrl 自带 UA，无需显式设置
+		// Base headers: requestUrl adds its own UA, no need to set explicitly
+		const baseHeaders: Record<string, string> = {
 			'Accept': '*/*',
 			...extraHeaders,
 		};
 
 		try {
-			await this.downloadViaRequestUrl(url, destPath, mergedHeaders);
+			await this.downloadViaRequestUrl(url, destPath, baseHeaders);
 			return;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -108,8 +108,15 @@ export class FileDownloader {
 			throw new Error(`文件下载失败 / File download failed: requestUrl failed and anti-hotlink enhanced is disabled`);
 		}
 
+		// Node.js https.get 无默认 UA，需显式设置 Chrome UA 以绕过防盗链
+		// Node.js https.get has no default UA, set Chrome UA for anti-hotlink
+		const nodeHeaders: Record<string, string> = {
+			'User-Agent': CHROME_UA,
+			...baseHeaders,
+		};
+
 		try {
-			await this.downloadViaNodeHttps(url, destPath, mergedHeaders);
+			await this.downloadViaNodeHttps(url, destPath, nodeHeaders);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			throw new Error(`文件下载失败 / File download failed: ${msg}`);
