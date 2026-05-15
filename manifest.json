@@ -5,6 +5,6 @@
 	"minAppVersion": "1.11.4",
 	"description": "Sync notes from IMA personal knowledge base to your vault.",
 	"author": "chenxiccc",
-	"authorUrl": "",
+	"authorUrl": "https://github.com/chenxiccc/obsidian-ima.copilot-sync",
 	"isDesktopOnly": false
 }
