@@ -7,3 +7,4 @@ docs/
 CLAUDE.md
 .claude/
 .playwright-mcp/
+.eslintcache
