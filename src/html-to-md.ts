@@ -1,7 +1,12 @@
 import Defuddle from 'defuddle/full';
-import type { DefuddleOptions } from 'defuddle/full';
+import type { DefuddleOptions, DefuddleResponse } from 'defuddle/full';
 
 // ─── HTML→Markdown 转换器（基于 defuddle）/ HTML→Markdown converter (defuddle-based) ────
+
+/** defuddle npm 发布版暂缺 authorUrl 字段，本地扩展 / npm release of defuddle is missing authorUrl; local extension */
+interface DefuddleResult extends DefuddleResponse {
+	authorUrl?: string;
+}
 
 /** 转换结果 / Conversion result */
 export interface HtmlToMdResult {
@@ -56,7 +61,7 @@ export function convertHtmlToMarkdown(
 	return {
 		title: result.title ?? '',
 		author: result.author ?? '',
-		authorUrl: result.authorUrl,
+		authorUrl: (result as DefuddleResult).authorUrl,
 		published,
 		content: result.content ?? '',
 	};
