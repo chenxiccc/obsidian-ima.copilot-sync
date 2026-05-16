@@ -105,8 +105,7 @@ export default class ImaPlugin extends Plugin {
 		const file = leaf.view.file;
 		if (!file) return;
 
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		if (!file.path.startsWith(syncFolder + '/')) return;
+		if (!this.isPathInSyncFolder(file.path)) return;
 
 		const view = leaf.view;
 		if (view.getMode() === 'preview') return;
@@ -146,8 +145,7 @@ export default class ImaPlugin extends Plugin {
 		const file = activeView.file;
 		if (!file) return;
 
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		if (file.path.startsWith(syncFolder + '/')) return;
+		if (this.isPathInSyncFolder(file.path)) return;
 
 		this.saveEditorState(activeView);
 	}
@@ -164,8 +162,7 @@ export default class ImaPlugin extends Plugin {
 		const file = leaf.view.file;
 		if (!file) return;
 
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		const isImaFile = file.path.startsWith(syncFolder + '/');
+		const isImaFile = this.isPathInSyncFolder(file.path);
 		const view = leaf.view;
 
 		if (isImaFile) {
@@ -222,6 +219,14 @@ export default class ImaPlugin extends Plugin {
 			clientId: this.app.secretStorage.getSecret(SECRET_ID_CLIENT),
 			apiKey: this.app.secretStorage.getSecret(SECRET_ID_API_KEY),
 		};
+	}
+
+	/**
+	 * 判断给定路径是否在 ima 同步文件夹下 / Check if path is under IMA sync folder
+	 */
+	private isPathInSyncFolder(filePath: string): boolean {
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		return filePath.startsWith(syncFolder + '/') || filePath === syncFolder;
 	}
 
 	/**

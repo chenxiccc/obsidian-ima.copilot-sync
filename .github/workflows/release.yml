@@ -1,5 +1,5 @@
-# 每次 push main 时自动构建并发布到 GitHub Releases
-# Automatically build and publish to GitHub Releases on every push to main
+# 仅 manifest.json 变更（版本号变更）时自动构建并发布到 GitHub Releases
+# Only build and publish when manifest.json changes (i.e., version bump)
 
 name: Release Obsidian Plugin
 
@@ -7,6 +7,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'manifest.json'
 
 jobs:
   release:

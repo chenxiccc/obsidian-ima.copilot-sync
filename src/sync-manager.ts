@@ -6,7 +6,7 @@ import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
+import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -443,9 +443,17 @@ export class SyncManager {
 		const authorMatch = intro.match(/作者[：:]\s*([^\n发布]+)/);
 		const author = authorMatch?.[1]?.trim() ?? '';
 
-		// 直接使用 introduction 原文（含发布时间/地点等元数据）作为正文摘要
-		// Use introduction as-is (including publish time/location metadata) as body excerpt
-		const body = intro.trim();
+		// introduction 可能以 "# 标题" 开头，去掉该前缀（我们已单独添加标题）
+		// introduction may start with "# Title", strip that prefix (title is already added separately)
+		let body = intro.trim();
+		if (body.startsWith('# ') || body.startsWith('#')) {
+			const firstNewline = body.indexOf('\n');
+			if (firstNewline > 0) {
+				body = body.substring(firstNewline + 1).trimStart();
+			} else {
+				body = ''; // 只有标题行，无正文 / Only title line, no body
+			}
+		}
 
 		const aiAbstract = item.abstract?.trim() ?? '';
 
@@ -644,24 +652,47 @@ export class SyncManager {
 		mediaId: string,
 	): Promise<string> {
 		try {
-			// requestUrl 自带 UA，无需显式设置 / requestUrl adds its own UA, no need to set explicitly
-			const requestHeaders: Record<string, string> = {
+			// 构建基础请求头（requestUrl 不支持自定义 UA/Referer，会被 Chromium 安全策略剥离）
+			// Build base headers (requestUrl cannot send custom UA/Referer — stripped by Chromium security policy)
+			const baseHeaders: Record<string, string> = {
 				'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 				...headers,
 			};
 
-			const response = await requestUrl({
-				url,
-				method: 'GET',
-				headers: requestHeaders,
-				throw: false,
-			});
+			let html: string;
+			try {
+				// 首选 requestUrl / Try requestUrl first
+				const response = await requestUrl({
+					url,
+					method: 'GET',
+					headers: baseHeaders,
+					throw: false,
+				});
 
-			if (response.status >= 400) {
-				throw new Error(`HTTP ${response.status}`);
+				if (response.status >= 400) {
+					throw new Error(`HTTP ${response.status}`);
+				}
+
+				html = response.text;
+			} catch (requestUrlErr) {
+				// requestUrl 失败，检查防盗链增强开关
+				// requestUrl failed, check anti-hotlink enhanced flag
+				if (!this.settings.antiHotlinkEnhanced) {
+					throw requestUrlErr;
+				}
+
+				const requestUrlMsg = requestUrlErr instanceof Error ? requestUrlErr.message : String(requestUrlErr);
+				console.warn(`ima.copilot Sync: requestUrl 网页获取失败，尝试 Node.js 兜底 / requestUrl web fetch failed, trying Node.js fallback: ${requestUrlMsg}`);
+
+				// Node.js https 可可靠发送自定义 UA/Referer，设置 Chrome UA 绕过防盗链
+				// Node.js https can reliably send custom UA/Referer, set Chrome UA to bypass anti-hotlink
+				const nodeHeaders: Record<string, string> = {
+					'User-Agent': CHROME_UA,
+					...baseHeaders,
+				};
+				html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 			}
 
-			const html = response.text;
 			const result = convertHtmlToMarkdown(html, {
 				url,
 				contentSelector: isWeChat ? '#js_content' : undefined,
@@ -682,7 +713,7 @@ export class SyncManager {
 			return escapeInlineHash(parts.join('\n'));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			return `> 网页内容获取失败：${msg}\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
+			return `---\nmedia_id: "${mediaId}"\n---\n\n> 网页无法获取，请打开网页尝试用 [Web Clipper](https://obsidian.md/clipper) 获取\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
 		}
 	}
 
@@ -1057,6 +1088,7 @@ export class SyncManager {
 			}
 		}
 	}
+
 }
 
 /**

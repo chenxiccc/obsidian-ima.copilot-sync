@@ -81,14 +81,14 @@ export class FileDownloader {
 	 * 带反盗链的下载：先尝试 requestUrl，失败后尝试 Node.js https.get（仅桌面端）
 	 * Download with anti-hotlink: try requestUrl first, then Node.js https.get fallback (desktop only)
 	 */
-	private async downloadWithAntiHotlink(
+	public async downloadWithAntiHotlink(
 		url: string,
 		destPath: string,
 		extraHeaders?: Record<string, string>,
 		antiHotlinkEnhanced = false,
 	): Promise<void> {
-		// 基础请求头：requestUrl 自带 UA，无需显式设置
-		// Base headers: requestUrl adds its own UA, no need to set explicitly
+		// 基础请求头：requestUrl 不支持自定义 UA/Referer（会被 Chromium 安全策略剥离），仅 Node.js 路径可传递
+		// Base headers: requestUrl cannot send custom UA/Referer (stripped by Chromium security policy), only Node.js path can deliver them
 		const baseHeaders: Record<string, string> = {
 			'Accept': '*/*',
 			...extraHeaders,
@@ -108,8 +108,8 @@ export class FileDownloader {
 			throw new Error(`文件下载失败 / File download failed: requestUrl failed and anti-hotlink enhanced is disabled`);
 		}
 
-		// Node.js https.get 无默认 UA，需显式设置 Chrome UA 以绕过防盗链
-		// Node.js https.get has no default UA, set Chrome UA for anti-hotlink
+		// Node.js https.get 可可靠发送自定义 UA/Referer，设置 Chrome UA 以绕过防盗链
+		// Node.js https.get can reliably send custom UA/Referer, set Chrome UA for anti-hotlink
 		const nodeHeaders: Record<string, string> = {
 			'User-Agent': CHROME_UA,
 			...baseHeaders,
@@ -210,6 +210,71 @@ export class FileDownloader {
 			req.setTimeout(60_000, () => {
 				req.destroy();
 				reject(new Error('下载超时 / Download timeout'));
+			});
+		});
+	}
+
+	/**
+	 * 通过 Node.js https.get 获取网页 HTML（桌面端反盗链兜底）
+	 * Fetch webpage HTML via Node.js https.get (desktop anti-hotlink fallback)
+	 *
+	 * 仿照 downloadViaNodeHttps，但返回 HTML 字符串而非写文件
+	 * Modeled after downloadViaNodeHttps, but returns HTML string instead of writing to file
+	 */
+	public async fetchHtmlViaNodeHttps(
+		url: string,
+		headers: Record<string, string>,
+	): Promise<string> {
+		// 动态引入 Node.js 模块，移动端不可用时直接抛错
+		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
+		let https: typeof import('https');
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
+			https = require('https') as typeof import('https');
+		} catch {
+			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
+		}
+
+		return new Promise<string>((resolve, reject) => {
+			const req = https.get(url, { headers }, (res) => {
+				if (!res.statusCode || res.statusCode >= 400) {
+					reject(new Error(`HTTP ${res.statusCode}`));
+					return;
+				}
+
+				// 处理重定向 / Handle redirects
+				if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+					this.fetchHtmlViaNodeHttps(res.headers.location, headers)
+						.then(resolve)
+						.catch(reject);
+					return;
+				}
+
+				// 收集响应数据并拼接为 UTF-8 字符串
+				// Collect response data and concatenate as UTF-8 string
+				const chunks: Buffer[] = [];
+				// eslint-disable-next-line no-undef -- Buffer from Node.js env
+				res.on('data', (chunk: Buffer) => chunks.push(chunk));
+				res.on('end', () => {
+					try {
+						// eslint-disable-next-line no-undef -- Buffer from Node.js env
+						const buffer = Buffer.concat(chunks);
+						if (buffer.length < 1024) {
+							console.warn(`ima.copilot Sync: Node.js 获取 HTML 仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js HTML fetch only ${buffer.length} bytes, may be anti-hotlink error page`);
+						}
+						const html = buffer.toString('utf-8');
+						resolve(html);
+					} catch (err) {
+						reject(err instanceof Error ? err : new Error(String(err)));
+					}
+				});
+				res.on('error', reject);
+			});
+			req.on('error', reject);
+			// 超时 60 秒 / 60 second timeout
+			req.setTimeout(60_000, () => {
+				req.destroy();
+				reject(new Error('获取 HTML 超时 / HTML fetch timeout'));
 			});
 		});
 	}
