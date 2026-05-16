@@ -2,7 +2,6 @@ import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
 import {
-	CHROME_UA,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	buildStableFilename,
@@ -325,56 +324,10 @@ export class ImageHandler {
 		return this.urlToFilename(url, naming);
 	}
 
-	/** 下载图片并写入 vault / Download image and write to vault */
+	/** 下载图片并写入 vault — 委托 FileDownloader 统一处理防盗链 / Download image and write to vault — delegate to FileDownloader for unified anti-hotlink */
 	private async downloadImage(url: string, destPath: string, antiHotlinkEnhanced = false): Promise<void> {
-		console.debug(`ima.copilot Sync: 开始下载图片 / Downloading image: ${url.substring(0, 100)}...`);
-
-		// 先尝试 requestUrl / Try requestUrl first
-		try {
-			await this.downloadViaRequestUrl(url, destPath);
-			return;
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			console.warn(`ima.copilot Sync: requestUrl 图片下载失败 / requestUrl image download failed: ${msg}`);
-		}
-
-		// 防盗链增强回退：Node.js https.get（仅桌面端）
-		// Anti-hotlink enhanced fallback: Node.js https.get (desktop only)
-		if (!antiHotlinkEnhanced || !this.fileDownloader) {
-			throw new Error('图片下载失败 / Image download failed');
-		}
-
-		const headers: Record<string, string> = {
-			'User-Agent': CHROME_UA,
-			'Accept': '*/*',
-		};
-
-		try {
-			await this.fileDownloader.downloadViaNodeHttps(url, destPath, headers);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			throw new Error(`图片下载失败（Node.js 回退）/ Image download failed (Node.js fallback): ${msg}`);
-		}
-	}
-
-	/** 通过 requestUrl 下载图片 / Download image via requestUrl */
-	private async downloadViaRequestUrl(url: string, destPath: string): Promise<void> {
-		// requestUrl 自带 UA，无需显式设置 / requestUrl adds its own UA, no need to set explicitly
-		const response = await requestUrl({
-			url,
-			method: 'GET',
-			throw: false,
-		});
-
-		console.debug(`ima.copilot Sync: 图片下载响应 / Image download response: HTTP ${response.status} for ${destPath}`);
-
-		if (response.status >= 400) {
-			const bodySnippet = response.text?.substring(0, 500) ?? '';
-			console.error(`ima.copilot Sync: 图片下载失败 / Image download failed: HTTP ${response.status}, body: ${bodySnippet}`);
-			throw new Error(`HTTP ${response.status}`);
-		}
-
-		await this.vault.adapter.writeBinary(destPath, response.arrayBuffer);
-		console.debug(`ima.copilot Sync: 图片已保存 / Image saved: ${destPath}`);
+		// 委托 FileDownloader 统一处理（requestUrl → Node.js https 兜底），避免重复防盗链逻辑
+		// Delegate to FileDownloader for unified handling (requestUrl → Node.js https fallback), avoid duplicating anti-hotlink logic
+		await this.fileDownloader!.downloadWithAntiHotlink(url, destPath, /* headers */ undefined, antiHotlinkEnhanced);
 	}
 }

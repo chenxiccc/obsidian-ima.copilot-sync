@@ -83,13 +83,12 @@ export async function ensureFolder(vault: Vault, folderPath: string): Promise<vo
 }
 
 /**
- * Chrome UA，仅用于 Node.js https.get 兜底反盗链下载（requestUrl 自带 UA，无需显式设置）
- * Chrome UA for Node.js https.get anti-hotlink fallback only (requestUrl handles its own UA)
- *
- * 使用标准 Chrome 134 macOS UA，格式与真实 Chrome 完全一致。
- * Uses standard Chrome 134 macOS UA, format identical to real Chrome.
+ * Chrome UA，仅用于 Node.js https.get 兜底反盗链（requestUrl 不支持自定义 UA/Referer，会被 Chromium 安全策略剥离）
+ * Chrome UA for Node.js https.get anti-hotlink fallback only (requestUrl cannot send custom UA/Referer — stripped by Chromium security policy)
+ * 必须硬编码，不能用 navigator API（违反 Obsidian 审核规范）
+ * Must be hardcoded, navigator API is forbidden by Obsidian review guidelines
  */
-export const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+export const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.7258.108 Safari/537.36';
 
 /**
  * HEAD 请求检查附件是否超过大小限制

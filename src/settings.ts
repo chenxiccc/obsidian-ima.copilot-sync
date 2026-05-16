@@ -73,7 +73,7 @@ export interface ImaPluginSettings {
 	publicKnowledgeBases: PublicKnowledgeBase[];
 	/** ima 文件强制阅读模式 / Force reading mode for ima files */
 	forceReadingMode: boolean;
-	/** 防盗链图片下载增强（Node.js https 回退，仅桌面端）/ Anti-hotlink enhanced download (Node.js https fallback, desktop only) */
+	/** 防盗链下载增强（Node.js https 回退，仅桌面端）/ Anti-hotlink download enhancement (Node.js https fallback, desktop only) */
 	antiHotlinkEnhanced: boolean;
 }
 
@@ -683,8 +683,8 @@ export class ImaSettingTab extends PluginSettingTab {
 		// ── 防盗链增强 / Anti-hotlink enhancement ────────────────────────────
 
 		new Setting(containerEl)
-			.setName('防盗链图片下载增强')
-			.setDesc('开启后图片/文件下载失败时自动使用 Node.js 回退重试（仅桌面端有效）')
+			.setName('防盗链下载增强')
+			.setDesc('开启后下载失败时自动使用 Node.js 回退重试，含图片、文件与网页抓取（仅桌面端有效）')
 			.addToggle(toggle => {
 				toggle
 					.setValue(Platform.isDesktop ? this.plugin.settings.antiHotlinkEnhanced : false)

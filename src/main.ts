@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath } from 'obsidian';
+import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath, Platform } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
@@ -69,6 +69,23 @@ export default class ImaPlugin extends Plugin {
 			}),
 		);
 
+		// ── 三点菜单：ima重新下载（仅桌面端）/ More options menu: IMA re-download (desktop only)
+		this.registerEvent(
+			this.app.workspace.on('editor-menu', (menu, _editor, info) => {
+				if (!Platform.isDesktop) return;
+				const file = info.file;
+				if (!file) return;
+				if (!this.isPathInSyncFolder(file.path)) return;
+				const cache = this.app.metadataCache.getFileCache(file);
+				if (!cache?.frontmatter?.['media_id']) return;
+				menu.addItem((item) => {
+					item.setTitle('ima重新下载')
+						.setIcon('refresh-cw')
+						.onClick(() => { void this.syncManager.reDownload(file); });
+				});
+			})
+		);
+
 		// ── 启动时同步（等待 workspace 准备完毕后延迟 2 秒，避免阻塞启动）
 		// ── Sync on startup (delay 2s after workspace ready to avoid blocking startup)
 		this.app.workspace.onLayoutReady(() => {
@@ -105,8 +122,7 @@ export default class ImaPlugin extends Plugin {
 		const file = leaf.view.file;
 		if (!file) return;
 
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		if (!file.path.startsWith(syncFolder + '/')) return;
+		if (!this.isPathInSyncFolder(file.path)) return;
 
 		const view = leaf.view;
 		if (view.getMode() === 'preview') return;
@@ -146,8 +162,7 @@ export default class ImaPlugin extends Plugin {
 		const file = activeView.file;
 		if (!file) return;
 
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		if (file.path.startsWith(syncFolder + '/')) return;
+		if (this.isPathInSyncFolder(file.path)) return;
 
 		this.saveEditorState(activeView);
 	}
@@ -164,8 +179,7 @@ export default class ImaPlugin extends Plugin {
 		const file = leaf.view.file;
 		if (!file) return;
 
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		const isImaFile = file.path.startsWith(syncFolder + '/');
+		const isImaFile = this.isPathInSyncFolder(file.path);
 		const view = leaf.view;
 
 		if (isImaFile) {
@@ -222,6 +236,14 @@ export default class ImaPlugin extends Plugin {
 			clientId: this.app.secretStorage.getSecret(SECRET_ID_CLIENT),
 			apiKey: this.app.secretStorage.getSecret(SECRET_ID_API_KEY),
 		};
+	}
+
+	/**
+	 * 判断给定路径是否在 ima 同步文件夹下 / Check if path is under IMA sync folder
+	 */
+	private isPathInSyncFolder(filePath: string): boolean {
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		return filePath.startsWith(syncFolder + '/') || filePath === syncFolder;
 	}
 
 	/**
