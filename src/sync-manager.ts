@@ -443,9 +443,17 @@ export class SyncManager {
 		const authorMatch = intro.match(/作者[：:]\s*([^\n发布]+)/);
 		const author = authorMatch?.[1]?.trim() ?? '';
 
-		// 直接使用 introduction 原文（含发布时间/地点等元数据）作为正文摘要
-		// Use introduction as-is (including publish time/location metadata) as body excerpt
-		const body = intro.trim();
+		// introduction 可能以 "# 标题" 开头，去掉该前缀（我们已单独添加标题）
+		// introduction may start with "# Title", strip that prefix (title is already added separately)
+		let body = intro.trim();
+		if (body.startsWith('# ') || body.startsWith('#')) {
+			const firstNewline = body.indexOf('\n');
+			if (firstNewline > 0) {
+				body = body.substring(firstNewline + 1).trimStart();
+			} else {
+				body = ''; // 只有标题行，无正文 / Only title line, no body
+			}
+		}
 
 		const aiAbstract = item.abstract?.trim() ?? '';
 
@@ -705,7 +713,7 @@ export class SyncManager {
 			return escapeInlineHash(parts.join('\n'));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			return `> 网页内容获取失败：${msg}\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
+			return `> 网页无法获取，请打开网页尝试用 [Web Clipper](https://obsidian.md/clipper) 获取\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
 		}
 	}
 

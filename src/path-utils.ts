@@ -192,9 +192,23 @@ export function escapePathForMarkdown(relPath: string): string {
 	return relPath.includes(' ') ? `<${relPath}>` : relPath;
 }
 
-/** 转义正文中非标题的 # 号，避免 Obsidian 误识别为标签 / Escape inline # to prevent Obsidian tag misidentification */
+/**
+ * 转义正文中非标题的 # 号，避免 Obsidian 误识别为标签
+ * Escape inline # to prevent Obsidian tag misidentification
+ * YAML frontmatter 区域（--- 之间）不做转义，避免破坏 URL 中的 #fragment
+ * YAML frontmatter section (between ---) is skipped to avoid corrupting URL #fragments
+ */
 export function escapeInlineHash(text: string): string {
+	let inFrontmatter = false;
+	let fmDelimiterCount = 0;
+
 	return text.split('\n').map(line => {
+		if (line.trim() === '---') {
+			fmDelimiterCount++;
+			inFrontmatter = (fmDelimiterCount % 2 === 1);
+			return line;
+		}
+		if (inFrontmatter) return line;
 		// 行首 #{1,6} 后跟空格是标题，保留 / Line starting with #{1,6} followed by space is a heading, preserve
 		if (/^#{1,6}\s/.test(line)) return line;
 		// 其他 # 后跟非空格字符的，加 \ 转义 / Escape other # followed by non-space
