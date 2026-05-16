@@ -205,7 +205,9 @@ export class ImaSettingTab extends PluginSettingTab {
 					.onClick(async () => {
 						let text: string;
 						try {
-							text = await navigator.clipboard.readText();
+															// 读取剪贴板用于粘贴 IMA API 凭证（client_id / api_key），非读取用户笔记内容
+								// Read clipboard to paste IMA API credentials, not user note content
+								text = await navigator.clipboard.readText();
 						} catch {
 							new Notice('无法读取剪贴板，请检查浏览器/系统权限');
 							return;

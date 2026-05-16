@@ -492,6 +492,8 @@ export class SyncManager {
 	 * 扫描知识库文件夹下已有 .md 文件，从 metadataCache 提取 media_id（零 I/O）
 	 * Scan existing KB .md files, extract media_id from metadataCache (zero I/O)
 	 */
+		// vault.getFiles() 用于增量同步：仅扫描 vault 中 .md 文件路径做存在性判断，不读取文件内容
+	// vault.getFiles() for incremental sync: only scans .md file paths for existence check, does not read file content
 	private scanExistingKbFiles(kbFolder: string): Map<string, string> {
 		const map = new Map<string, string>();
 		const mdFiles = this.vault.getFiles().filter(f =>
@@ -513,6 +515,8 @@ export class SyncManager {
 	 * 扫描 syncFolder 根目录下已有 .md 文件，从 metadataCache 提取 docid（零 I/O）
 	 * Scan existing note .md files in syncFolder root, extract docid from metadataCache (zero I/O)
 	 */
+		// vault.getFiles() 用于增量同步：仅扫描 syncFolder 根目录 .md 文件，判断 docid 是否已同步
+	// vault.getFiles() for incremental sync: scans syncFolder root .md files to check if docid already synced
 	private scanExistingNoteFiles(syncFolder: string): Map<string, string> {
 		const map = new Map<string, string>();
 		const mdFiles = this.vault.getFiles().filter(f =>
@@ -889,6 +893,8 @@ export class SyncManager {
 	private async fixPendingImages(syncFolder: string, opts: AttachmentOptions): Promise<void> {
 		if (!opts.downloadImages && !opts.downloadFiles) return;
 
+		// vault.getFiles() 扫描所有已同步 .md 文件以修复残留外链图片，不读取文件内容
+		// vault.getFiles() scans all synced .md files to fix leftover external image links, does not read content
 		const mdFiles = this.vault.getFiles().filter(f =>
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/'),
 		);
@@ -1052,6 +1058,8 @@ export class SyncManager {
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
+		// vault.getFiles() 扫描所有已同步 .md 文件以清理未被引用的孤儿图片，不读取文件内容
+		// vault.getFiles() scans all synced .md files to clean unreferenced orphan images, does not read content
 		const mdFiles = this.vault.getFiles().filter(f =>
 			f.extension === 'md' && f.path.startsWith(syncFolder + '/') && f.path !== skipFile,
 		);
