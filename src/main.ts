@@ -1,4 +1,4 @@
-import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath, Platform } from 'obsidian';
+import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
@@ -67,23 +67,6 @@ export default class ImaPlugin extends Plugin {
 				// active-leaf-change doesn't fire; capture it here
 				this.captureCurrentEditorState();
 			}),
-		);
-
-		// ── 三点菜单：ima重新下载（仅桌面端）/ More options menu: IMA re-download (desktop only)
-		this.registerEvent(
-			this.app.workspace.on('editor-menu', (menu, _editor, info) => {
-				if (!Platform.isDesktop) return;
-				const file = info.file;
-				if (!file) return;
-				if (!this.isPathInSyncFolder(file.path)) return;
-				const cache = this.app.metadataCache.getFileCache(file);
-				if (!cache?.frontmatter?.['media_id']) return;
-				menu.addItem((item) => {
-					item.setTitle('ima重新下载')
-						.setIcon('refresh-cw')
-						.onClick(() => { void this.syncManager.reDownload(file); });
-				});
-			})
 		);
 
 		// ── 启动时同步（等待 workspace 准备完毕后延迟 2 秒，避免阻塞启动）
