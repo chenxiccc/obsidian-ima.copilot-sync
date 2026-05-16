@@ -713,7 +713,7 @@ export class SyncManager {
 			return escapeInlineHash(parts.join('\n'));
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			return `> 网页无法获取，请打开网页尝试用 [Web Clipper](https://obsidian.md/clipper) 获取\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
+			return `---\nmedia_id: "${mediaId}"\n---\n\n> 网页无法获取，请打开网页尝试用 [Web Clipper](https://obsidian.md/clipper) 获取\n\n**标题**: ${title}\n\n**原文链接**: [${url}](${url})`;
 		}
 	}
 
