@@ -317,6 +317,55 @@ export class SyncManager {
 			return 0;
 		}
 
+		// 检查解析进度，未完成则等待重试 / Check parse progress, retry if incomplete
+		const PARSE_RETRY_MAX = 5;
+		const PARSE_RETRY_DELAY_MS = 10000;
+		for (let attempt = 0; attempt < PARSE_RETRY_MAX; attempt++) {
+			const unready = items.filter(i => i.parse_progress < 100);
+			if (unready.length === 0) break;
+
+			console.debug(
+				`ima.copilot Sync: ${unready.length} 个条目解析未完成，第 ${attempt + 1}/${PARSE_RETRY_MAX} 次重试等待...`,
+				unready.map(i => i.title),
+			);
+			await new Promise(r => setTimeout(r, PARSE_RETRY_DELAY_MS));
+
+			// 重新拉取全部条目以获取最新 parse_progress / Re-fetch all items for latest parse_progress
+			const refreshedItems = numericKbId
+				? await this.publicClient.listAllPublicItems(numericKbId)
+				: pubKB.shareId
+					? await this.publicClient.listAllSharedItems(pubKB.shareId)
+					: [];
+
+			const refreshedMap = new Map(refreshedItems.map(i => [i.media_id, i]));
+			for (const item of unready) {
+				const refreshed = refreshedMap.get(item.media_id);
+				if (refreshed) {
+					item.parse_progress = refreshed.parse_progress;
+					item.raw_file_url = refreshed.raw_file_url;
+					item.source_path = refreshed.source_path;
+					item.abstract = refreshed.abstract;
+					item.introduction = refreshed.introduction;
+					item.summary_state = refreshed.summary_state;
+				}
+			}
+		}
+
+		// 移除仍未就绪的条目，不创建文件，下次同步自动重试
+		// Remove items still not ready, skip creating files, will retry on next sync
+		const skippedItems = items.filter(i => i.parse_progress < 100);
+		if (skippedItems.length > 0) {
+			console.warn(
+				`ima.copilot Sync: ${skippedItems.length} 个条目解析仍未完成，跳过：`,
+				skippedItems.map(i => i.title),
+			);
+			for (let i = items.length - 1; i >= 0; i--) {
+			if (items[i]!.parse_progress < 100) {
+					items.splice(i, 1);
+				}
+			}
+		}
+
 		// 扫描已有文件 / Scan existing files
 		const existingMap = this.scanExistingKbFiles(kbFolder);
 
@@ -593,6 +642,32 @@ export class SyncManager {
 			if (mediaInfo.url_info?.url) {
 				const { url, headers } = mediaInfo.url_info;
 				return await this.syncByMediaType(item.media_type, url, headers, item.title, filePath, opts, item.media_id);
+			}
+
+			// 文件类型无 url_info 时重试（解析可能未完成），非文件类型直接 fallback
+			// File types retry when url_info is missing (parsing may be incomplete), non-file types fallback directly
+			if (FILE_MEDIA_TYPES.has(item.media_type)) {
+				const FILE_RETRY_MAX = 5;
+				const FILE_RETRY_DELAY_MS = 10000;
+				for (let attempt = 0; attempt < FILE_RETRY_MAX; attempt++) {
+					console.debug(
+						`ima.copilot Sync: get_media_info url_info 为空，第 ${attempt + 1}/${FILE_RETRY_MAX} 次重试: ${item.title}`,
+					);
+					await new Promise(r => setTimeout(r, FILE_RETRY_DELAY_MS));
+					try {
+						const retryInfo = await this.client!.getMediaInfo(item.media_id);
+						if (retryInfo.url_info?.url) {
+							const { url, headers } = retryInfo.url_info;
+							return await this.syncByMediaType(item.media_type, url, headers, item.title, filePath, opts, item.media_id);
+						}
+					} catch (retryErr) {
+						console.warn(`ima.copilot Sync: get_media_info 重试失败: ${item.title}`, retryErr);
+					}
+				}
+				// 重试耗尽，跳过不创建文件，下次同步自动重试
+				// Retries exhausted, skip without creating file, will retry on next sync
+				console.warn(`ima.copilot Sync: get_media_info 重试 ${FILE_RETRY_MAX} 次后仍无 url_info，跳过: ${item.title}`);
+				return null;
 			}
 
 			return this.buildPlaceholder(item);

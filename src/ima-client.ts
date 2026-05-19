@@ -425,6 +425,12 @@ export interface PublicKBItem {
 		folder_number: string;
 		parent_folder_id: string;
 	} | null;
+	/** 解析进度 0~100，100=完成 / Parse progress 0~100, 100=complete */
+	parse_progress: number;
+	/** 摘要状态，2=已完成 / Summary state, 2=complete */
+	summary_state: number;
+	/** 媒体状态，2=正常 / Media state, 2=normal */
+	media_state: number;
 }
 
 /** 公共知识库元信息 / Public KB metadata */
@@ -588,6 +594,19 @@ export class ImaPublicClient {
 			folderId,
 			folderPath,
 		);
+	}
+
+	/**
+	 * 在指定文件夹中查找单个条目（用于重试时重新获取 parse_progress）
+	 * Find a single item in the specified folder (for re-checking parse_progress during retry)
+	 */
+	async getItemByMediaId(
+		numericKbId: string,
+		folderId: string,
+		mediaId: string,
+	): Promise<PublicKBItem | null> {
+		const result = await this.getKnowledgeListPublic(numericKbId, folderId, '', 50);
+		return result.knowledge_list.find(i => i.media_id === mediaId) ?? null;
 	}
 
 	/**
