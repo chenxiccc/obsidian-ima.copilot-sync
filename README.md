@@ -21,18 +21,16 @@
 **⚠ 单向同步**：本插件仅支持 **IMA → Obsidian** 单向同步。在 Obsidian 中对笔记做的任何修改**不会**同步回 IMA，每次同步会用 IMA 服务端内容覆盖本地文件。
 
 - **个人笔记同步**：将 IMA 笔记本中的所有笔记自动下载到 Obsidian
-- **知识库完整同步**：同步知识库中的所有类型条目
-  - **笔记**：完整同步内容并转为 Markdown
-  - **网页**：提取正文内容并转为 Markdown
-  - **微信文章**：
-    - 短链文章提取完整正文；
-    - 长链文章（订阅/公共知识库）仅同步约 300 字摘要 + AI 摘要
-  - **文件**（PDF、Word、PPT、Excel 等）：个人/共享知识库可下载到本地；订阅/公共知识库仅同步 AI 摘要
 - **图片和文件本地化**：自动下载笔记中的图片并保存到本地附件目录
+- **知识库同步**：同步知识库中的所有类型条目
+
+  - **笔记**：完整同步内容并转为 Markdown
+  - **网页**：提取正文内容并转为 Markdown（但部分需要登录或者有反爬措施的无法绕过)
+  - **微信文章**：三层回退提取——优先抓取完整图文；若页面为 JS 动态渲染则从 meta 标签提取完整正文（缺图片）；极端情况下回退到 IMA 摘要
+  - **文件**（PDF、Word、PPT、Excel 等）：个人/共享知识库可下载到本地；订阅/公共知识库仅同步 AI 摘要
 - **增量同步**：仅同步上次同步后有修改的笔记，减少不必要的请求
 - **自动定时同步**：按设定间隔自动在后台同步
 - **安全凭证存储**：凭证存储于 Obsidian 钥匙串（系统 Keychain），不以明文保存在配置文件中
-- **附件下载控制**：可选下载附件或保留原始链接，支持附件大小限制
 - **知识库删除同步**：支持删除/保留/标记三种模式处理 IMA 端已删除的条目
 
 ### 配置步骤
@@ -72,8 +70,7 @@
 
 - **订阅/公共知识库内容受限(个人知识库不受此限制)**：IMA API 对订阅知识库有访问限制，各类型内容的同步能力如下：
   - 笔记：仅同步约 300 字预览，无法获取完整内容
-  - 微信文章（长链）：微信服务端对无登录态的请求在路由层拦截，与 UA/headers 无关，无法绕过；仅同步约 300 字正文摘要 + AI 摘要，底部附原文链接
-  - 微信文章（短链）：可抓取完整正文
+  - 微信文章：三层回退提取——静态渲染文章可抓取完整图文；JS 动态渲染文章从 og:description meta 提取完整正文（缺图片，附原文链接）；极端失败时回退到 IMA 摘要
   - 文件（PDF/Word 等）：仅同步 AI 摘要，无法下载原件
   - 网页：可抓取完整正文
 - 知识库中部分条目如果 IMA API 未返回可访问的 URL，将仅同步标题（显示为占位符）
@@ -106,16 +103,16 @@ Forward WeChat official account articles to IMA, then auto-sync the content to O
 **⚠ One-way sync only**: This plugin syncs **IMA → Obsidian** only. Any edits made in Obsidian will **not** be synced back to IMA — each sync overwrites local files with the content from IMA.
 
 - **Personal notes sync**: Automatically downloads all notes from your IMA notebook
-- **Full knowledge base sync**: Syncs all item types from your IMA knowledge base
-  - **Notes**: Full content converted to Markdown
-  - **Webpages**: Extracts main content and converts to Markdown
-  - **WeChat articles**: Short-link articles get full content; long-link articles (subscribed/public KB) get ~300 character excerpt + AI summary
-  - **Files** (PDF, Word, PPT, Excel, etc.): Personal/shared KBs can download locally; subscribed/public KBs get AI summary only
 - **Image and file localization**: Downloads inline images and file attachments to a local folder
+- **Knowledge base sync**: Syncs all item types from your IMA knowledge base
+
+  - **Notes**: Full content converted to Markdown
+  - **Webpages**: Extracts main content and converts to Markdown (but sites requiring login or with anti-scraping measures cannot be bypassed)
+  - **WeChat articles**: Three-tier fallback — full content with images when statically rendered; full text from meta tags for JS-rendered pages (no images); IMA fallback in edge cases
+  - **Files** (PDF, Word, PPT, Excel, etc.): Personal/shared KBs can download locally; subscribed/public KBs get AI summary only
 - **Incremental sync**: Only fetches notes modified since the last sync
 - **Auto periodic sync**: Runs silently in the background on a configurable interval
 - **Secure credential storage**: Credentials stored in Obsidian keychain (system Keychain), never saved in plaintext
-- **Attachment download control**: Optionally download attachments or keep original links, with size limit support
 - **Knowledge base delete sync**: Three modes (delete/keep/mark) for handling items deleted from IMA
 
 ### Setup
@@ -155,8 +152,7 @@ Click **「测试」** to verify the connection.
 
 - **Subscribed/Public knowledge base content is limited (Personal knowledge base is not affected by this limitation)**: IMA API restricts access to subscribed knowledge bases. Sync capabilities by content type:
   - Notes: Only ~300 character preview, full content not available
-  - WeChat articles (long URL): WeChat server blocks requests without login session at the routing layer, independent of UA/headers — cannot bypass; only ~300 character excerpt + AI summary, with original link at the bottom
-  - WeChat articles (short URL): Full article content can be fetched
+  - WeChat articles: Three-tier fallback — statically rendered articles get full content with images; JS-rendered articles extract full text from og:description meta (no images, with original link); IMA fallback in extreme edge cases
   - Files (PDF/Word etc.): Only AI summary available, original files cannot be downloaded
   - Webpages: Full content can be fetched
 - Some knowledge base items may only sync the title (shown as a placeholder) if the IMA API does not return an accessible URL
