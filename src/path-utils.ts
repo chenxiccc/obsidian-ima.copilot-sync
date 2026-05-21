@@ -216,9 +216,31 @@ export function escapeInlineHash(text: string): string {
 	}).join('\n');
 }
 
-/** 根据 URL 猜测文件扩展名 / Guess file extension from URL */
+/**
+ * 根据 URL 猜测文件扩展名（仅检查 path + query + fragment，排除域名中的类似扩展名字符串）
+ * Guess file extension from URL (only checks path + query + fragment, excluding hostname
+ * to avoid false matches like .md in community.obsidian.md)
+ */
 export function guessFileExtension(url: string): string {
-	const lower = url.toLowerCase();
+	// 仅检查 URL 的 path + query + fragment，避免域名中的 .md/.pdf 等被误匹配
+	// Only check path + query + fragment, avoid false match on hostname (e.g., .md in obsidian.md)
+	let target = url;
+	try {
+		const u = new URL(url);
+		target = u.pathname + u.search + u.hash;
+	} catch {
+		// 非标准 URL（如纯文件名），使用原值 / Not a standard URL (e.g., plain filename), use as-is
+	}
+
+	const lower = target.toLowerCase();
+	// 图片扩展名优先（guessFileExtension 主要用于图片 URL 回退场景）
+	// Image extensions first (guessFileExtension is primarily used as a fallback for image URLs)
+	if (lower.includes('.png')) return '.png';
+	if (lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
+	if (lower.includes('.gif')) return '.gif';
+	if (lower.includes('.webp')) return '.webp';
+	if (lower.includes('.svg')) return '.svg';
+	// 文档扩展名 / Document extensions
 	if (lower.includes('.pdf')) return '.pdf';
 	if (lower.includes('.doc') || lower.includes('.docx')) return '.docx';
 	if (lower.includes('.ppt') || lower.includes('.pptx')) return '.pptx';
@@ -226,10 +248,6 @@ export function guessFileExtension(url: string): string {
 	if (lower.includes('.txt')) return '.txt';
 	if (lower.includes('.xmind')) return '.xmind';
 	if (lower.includes('.md') || lower.includes('.markdown')) return '.md';
-	if (lower.includes('.jpg') || lower.includes('.jpeg')) return '.jpg';
-	if (lower.includes('.png')) return '.png';
-	if (lower.includes('.gif')) return '.gif';
-	if (lower.includes('.webp')) return '.webp';
 	return '';
 }
 
