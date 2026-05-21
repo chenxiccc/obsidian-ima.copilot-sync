@@ -18,6 +18,8 @@ export interface HtmlToMdResult {
 	/** 发布时间（ISO 日期或日期时间字符串）/ Published time (ISO date or datetime string) */
 	published: string;
 	content: string;
+	/** 标记内容来自微信 meta 提取（缺图片），调用方可添加警告 / Indicates WeChat meta-extracted content (no images) */
+	fromMeta?: boolean;
 }
 
 /**
@@ -34,10 +36,14 @@ export function convertHtmlToMarkdown(
 		url?: string;
 		/** 强制正文选择器，如微信文章用 '#js_content' / Force content selector, e.g. '#js_content' for WeChat */
 		contentSelector?: string;
+		/** 预解析的 Document（避免重复 parseFromString）/ Pre-parsed Document (avoids duplicate parseFromString) */
+		doc?: Document;
 	},
 ): HtmlToMdResult {
-	const parser = new DOMParser();
-	const doc = parser.parseFromString(html, 'text/html');
+	const doc = options?.doc ?? (() => {
+		const parser = new DOMParser();
+		return parser.parseFromString(html, 'text/html');
+	})();
 
 	const defuddleOpts: DefuddleOptions = {
 		url: options?.url,
@@ -79,7 +85,7 @@ export function convertHtmlToMarkdown(
 function extractWeChatPublishTime(html: string): string | null {
 	// 优先从 JS 变量 ct 提取 Unix 时间戳（最可靠）
 	// Prefer JS variable ct (Unix timestamp, most reliable)
-	const ctMatch = html.match(/var\s+ct\s*=\s*"(\d+)"/);
+	const ctMatch = html.match(/var\s+ct\s*=\s*["'](\d+)["']/);
 	if (ctMatch?.[1]) {
 		try {
 			const date = new Date(Number(ctMatch[1]) * 1000);
@@ -103,4 +109,103 @@ function extractWeChatPublishTime(html: string): string | null {
 	}
 
 	return null;
+}
+
+// ─── 微信 JS 渲染文章 meta 提取 / WeChat JS-rendered article meta extraction ──
+
+/**
+ * 解码微信 meta 标签中的 C 风格转义序列（\x0a → 换行, \x26 → & 等）
+ * Decode C-style escape sequences in WeChat meta tags
+ * 注意：使用 String.fromCharCode 而非 decodeURIComponent，避免 UTF-8 解码破坏中文
+ * Note: uses String.fromCharCode instead of decodeURIComponent to avoid corrupting CJK characters
+ */
+function decodeWeChatMetaEscapes(raw: string): string {
+	let result = '';
+	for (let i = 0; i < raw.length; i++) {
+		if (raw[i] === '\\' && raw[i + 1] === 'x' && i + 4 <= raw.length) {
+			const hex = raw.substring(i + 2, i + 4);
+			const code = parseInt(hex, 16);
+			if (!isNaN(code)) {
+				result += String.fromCharCode(code);
+				i += 3;
+				continue;
+			}
+		}
+		result += raw[i];
+	}
+	return result;
+}
+
+/**
+ * 从微信 JS 渲染文章的 og:description meta 中提取正文
+ * Extract article body from og:description meta in WeChat JS-rendered pages
+ * 返回 null 表示：#js_content 已存在（用标准 defuddle）或 meta 标签缺失
+ */
+function extractWeChatMetaContent(
+	doc: Document,
+): { bodyHtml: string; title: string } | null {
+	// #js_content 存在时走标准 defuddle，不进入 meta 提取
+	// Skip meta extraction when #js_content exists (standard defuddle handles it)
+	if (doc.getElementById('js_content')) return null;
+
+	const ogDesc = doc.querySelector<HTMLMetaElement>('meta[property="og:description"]');
+	if (!ogDesc?.content) return null;
+
+	// 两层解码：\x 转义 → HTML 实体（单次正则避免顺序依赖）
+	// Two-layer decode: \x escapes → HTML entities (single regex avoids ordering dependency)
+	const ENTITY_MAP: Record<string, string> = { lt: '<', gt: '>', amp: '&', quot: '"' };
+	let decoded = decodeWeChatMetaEscapes(ogDesc.content)
+		.replace(/&(lt|gt|amp|quot);/g, (_, e: string) => ENTITY_MAP[e] ?? '');
+
+	// 按双换行分段，包裹 <p> 标签
+	// Split by double newlines, wrap in <p> tags
+	const paragraphs = decoded.split('\n\n').filter(p => p.trim());
+	const bodyParts = paragraphs.map(p => {
+		const trimmed = p.trim();
+		return `<p>${trimmed}</p>`;
+	});
+
+	const bodyHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><article>${bodyParts.join('\n')}</article></body></html>`;
+
+	// 提取 og:title / Extract og:title
+	const ogTitle = doc.querySelector<HTMLMetaElement>('meta[property="og:title"]');
+	const title = ogTitle?.content ?? '';
+
+	return { bodyHtml, title };
+}
+
+/**
+ * 微信文章 HTML → Markdown（自动选择最优提取策略）
+ * WeChat article HTML → Markdown (auto-selects best extraction strategy)
+ *
+ * Tier 1: #js_content 存在 → defuddle + contentSelector（完整图文）
+ * Tier 2: og:description meta 提取 → defuddle（完整文本，缺图片，标记 fromMeta）
+ * Tier 3: 裸 defuddle + extractWeChatPublishTime（最后尝试）
+ */
+export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToMdResult {
+	const parser = new DOMParser();
+	const doc = parser.parseFromString(html, 'text/html');
+
+	if (doc.getElementById('js_content')) {
+		return convertHtmlToMarkdown(html, { url, contentSelector: '#js_content', doc });
+	}
+
+	// Tier 2: meta 标签提取
+	// Tier 2: meta tag extraction
+	const metaResult = extractWeChatMetaContent(doc);
+	if (metaResult) {
+		const result = convertHtmlToMarkdown(metaResult.bodyHtml, { url });
+		const publishedFromCt = extractWeChatPublishTime(html);
+		return {
+			title: result.title || metaResult.title,
+			author: result.author,
+			published: result.published || publishedFromCt || '',
+			content: result.content,
+			fromMeta: true,
+		};
+	}
+
+	// Tier 3: 裸 defuddle（内部已对微信 URL 调用 extractWeChatPublishTime）
+	// Tier 3: bare defuddle (internally calls extractWeChatPublishTime for WeChat URLs)
+	return convertHtmlToMarkdown(html, { url });
 }

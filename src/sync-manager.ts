@@ -4,7 +4,8 @@ import type { AttachmentOptions } from './image-handler';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
 import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima-client';
 import { ImageHandler } from './image-handler';
-import { convertHtmlToMarkdown } from './html-to-md';
+import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown } from './html-to-md';
+import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
 import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
 
@@ -16,10 +17,39 @@ const MEDIA_TYPE_LABELS: Record<number, string> = {
 	13: 'TXT', 14: 'Xmind',
 };
 
-const FILE_MEDIA_TYPES = new Set([1, 3, 4, 5, 7, 9, 13, 14]);
+// ─── 媒体类型常量 / Media type constants ─────────────────────────────────
+
+const MEDIA_TYPE_PDF = 1;
+const MEDIA_TYPE_WEBPAGE = 2;
+const MEDIA_TYPE_WORD = 3;
+const MEDIA_TYPE_PPT = 4;
+const MEDIA_TYPE_EXCEL = 5;
+const MEDIA_TYPE_WECHAT = 6;
+const MEDIA_TYPE_MARKDOWN = 7;
+const MEDIA_TYPE_IMAGE = 9;
+const MEDIA_TYPE_NOTE = 11;
+const MEDIA_TYPE_TXT = 13;
+const MEDIA_TYPE_XMIND = 14;
+/** 可通过 URL 抓取正文的媒体类型 / Media types whose content can be fetched via URL */
+const FETCHABLE_MEDIA_TYPES = new Set([MEDIA_TYPE_WEBPAGE, MEDIA_TYPE_WECHAT]);
+
+const FILE_MEDIA_TYPES = new Set([
+	MEDIA_TYPE_PDF, MEDIA_TYPE_WORD, MEDIA_TYPE_PPT, MEDIA_TYPE_EXCEL,
+	MEDIA_TYPE_MARKDOWN, MEDIA_TYPE_IMAGE, MEDIA_TYPE_TXT, MEDIA_TYPE_XMIND,
+]);
 
 /** IMA 笔记中文件附件的 <file> 标签正则 / Regex for file attachment <file> tags in IMA notes */
 const FILE_TAG_REGEX = /<file\s+([^>]*)\s*\/>/g;
+
+/** syncByMediaType 参数 / syncByMediaType parameters */
+interface SyncMediaParams {
+	url: string;
+	headers?: Record<string, string>;
+	title: string;
+	filePath: string;
+	opts: AttachmentOptions;
+	mediaId: string;
+}
 
 export class SyncManager {
 	private client: ImaClient | null = null;
@@ -423,32 +453,33 @@ export class SyncManager {
 	): Promise<string | null> {
 		const fmBase = `---\nmedia_id: "${item.media_id}"\n`;
 
-		// 微信文章：raw_file_url / source_path 有完整微信 URL → 清理追踪参数后抓全文
-		// WeChat article: raw_file_url / source_path has full WeChat URL → strip tracking params then fetch
-		if (item.media_type === 6) {
+		// 微信文章：统一走三层回退（#js_content → meta 提取 → defuddle 裸提取 → IMA 兜底），不区分长链短链
+		// WeChat article: unified three-tier fallback (#js_content → meta → bare defuddle → IMA), no URL type distinction
+		if (item.media_type === MEDIA_TYPE_WECHAT) {
 			const url = item.raw_file_url || item.source_path;
 			if (url && url.startsWith('http')) {
-				// 长链（含 __biz 参数）无 session cookie 时被微信拦截，改用 introduction/abstract 摘要
-				// Long-form URLs with __biz are blocked by WeChat without session cookie; use introduction/abstract instead
-				if (url.includes('__biz')) {
+				const content = await this.syncWebContent(stripWeChatTrackingParams(url), undefined, item.title, item.media_id, convertWeChatHtmlToMarkdown);
+				// 三层回退均失败时，使用 IMA 的 introduction/abstract 兜底
+				// Fall back to IMA introduction/abstract when all three tiers fail
+				if (this.isWeChatContentGarbage(content)) {
 					return this.buildWeChatIntroContent(item);
 				}
-				return await this.syncWebContent(stripWeChatTrackingParams(url), undefined, item.title, true, item.media_id);
+				return content;
 			}
 		}
 
 		// 网页：source_path 有原始 URL → 抓全文
 		// Webpage: source_path has original URL → fetch full content
-		if (item.media_type === 2) {
+		if (item.media_type === MEDIA_TYPE_WEBPAGE) {
 			const url = item.source_path || item.raw_file_url;
 			if (url && url.startsWith('http')) {
-				return await this.syncWebContent(url, undefined, item.title, false, item.media_id);
+				return await this.syncWebContent(url, undefined, item.title, item.media_id);
 			}
 		}
 
 		// 笔记：introduction 提供预览（约 300 字符截断）
 		// Note: introduction provides preview (~300 chars truncated)
-		if (item.media_type === 11) {
+		if (item.media_type === MEDIA_TYPE_NOTE) {
 			const preview = item.introduction || item.abstract || '';
 			if (preview) {
 				return `${fmBase}content_type: preview\n---\n\n# ${item.title}\n\n${preview}\n\n> 此内容为笔记预览摘要，完整内容需要登录 IMA 查看。`;
@@ -535,6 +566,35 @@ export class SyncManager {
 			if (!isNaN(new Date(dateStr).getTime())) return dateStr;
 		}
 		return '';
+	}
+
+	/**
+	 * 检测微信文章内容是否为无效的 UI 残渣（三层回退均失败时触发 IMA 兜底）
+	 * Detect if WeChat article content is garbage UI chrome (triggers IMA fallback)
+	 */
+	private isWeChatContentGarbage(content: string): boolean {
+		// 提取 body：跳过 frontmatter（---...---）和标题行（# xxx）
+		// Extract body: skip frontmatter and title line
+		const lines = content.split('\n');
+		let i = 0;
+
+		// 跳过 YAML frontmatter / Skip YAML frontmatter
+		if (lines[0]?.trim() === '---') {
+			const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === '---');
+			if (end >= 0) i = end + 1;
+		}
+
+		// 跳过空行和标题行 / Skip blank lines and title line
+		while (i < lines.length && lines[i]!.trim() === '') i++;
+		if (i < lines.length && /^#\s/.test(lines[i]!.trim())) i++;
+
+		const body = lines.slice(i).join('\n').trim();
+
+		if (body.length > 150) return false;
+
+		// 微信 UI 特征词 / WeChat UI signature patterns
+		const garbagePatterns = ['微信扫一扫', '使用小程序', '向上滑动看下一个'];
+		return garbagePatterns.some(p => body.includes(p));
 	}
 
 	/**
@@ -632,7 +692,7 @@ export class SyncManager {
 		try {
 			const mediaInfo = await this.client!.getMediaInfo(item.media_id);
 
-			if (mediaInfo.media_type === 11 && mediaInfo.notebook_ext_info?.notebook_id) {
+			if (mediaInfo.media_type === MEDIA_TYPE_NOTE && mediaInfo.notebook_ext_info?.notebook_id) {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
 				const mdContent = await this.client!.getNoteContentMarkdown(notebookId);
 				const withImages = await this.imageHandler.processContent(mdContent, filePath, opts, item.title);
@@ -641,7 +701,7 @@ export class SyncManager {
 
 			if (mediaInfo.url_info?.url) {
 				const { url, headers } = mediaInfo.url_info;
-				return await this.syncByMediaType(item.media_type, url, headers, item.title, filePath, opts, item.media_id);
+				return await this.syncByMediaType(item.media_type, { url, headers, title: item.title, filePath, opts, mediaId: item.media_id });
 			}
 
 			// 文件类型无 url_info 时重试（解析可能未完成），非文件类型直接 fallback
@@ -658,7 +718,7 @@ export class SyncManager {
 						const retryInfo = await this.client!.getMediaInfo(item.media_id);
 						if (retryInfo.url_info?.url) {
 							const { url, headers } = retryInfo.url_info;
-							return await this.syncByMediaType(item.media_type, url, headers, item.title, filePath, opts, item.media_id);
+							return await this.syncByMediaType(item.media_type, { url, headers, title: item.title, filePath, opts, mediaId: item.media_id });
 						}
 					} catch (retryErr) {
 						console.warn(`ima.copilot Sync: get_media_info 重试失败: ${item.title}`, retryErr);
@@ -690,33 +750,24 @@ export class SyncManager {
 		}
 		return `---\n${key}: "${value}"\n---\n\n${content}`;
 	}
-
-	/**
-	 * 根据 media_type 分发处理
-	 * Dispatch by media_type
-	 */
 	private async syncByMediaType(
 		mediaType: number,
-		url: string,
-		headers: Record<string, string> | undefined,
-		title: string,
-		filePath: string,
-		opts: AttachmentOptions,
-		mediaId: string,
+		params: SyncMediaParams,
 	): Promise<string> {
-		if (mediaType === 2 || mediaType === 6) {
-			return await this.syncWebContent(url, headers, title, mediaType === 6, mediaId);
+		if (FETCHABLE_MEDIA_TYPES.has(mediaType)) {
+			const conv = mediaType === MEDIA_TYPE_WECHAT ? convertWeChatHtmlToMarkdown : undefined;
+			return await this.syncWebContent(params.url, params.headers, params.title, params.mediaId, conv);
 		}
 
-		if (mediaType === 9) {
-			return await this.syncFileDownload(url, headers, title, filePath, opts, true, mediaId);
+		if (mediaType === MEDIA_TYPE_IMAGE) {
+			return await this.syncFileDownload(params.url, params.headers, params.title, params.filePath, params.opts, true, params.mediaId);
 		}
 
 		if (FILE_MEDIA_TYPES.has(mediaType)) {
-			return await this.syncFileDownload(url, headers, title, filePath, opts, false, mediaId);
+			return await this.syncFileDownload(params.url, params.headers, params.title, params.filePath, params.opts, false, params.mediaId);
 		}
 
-		return this.buildPlaceholder({ media_id: mediaId, title, parent_folder_id: '', media_type: mediaType });
+		return this.buildPlaceholder({ media_id: params.mediaId, title: params.title, parent_folder_id: '', media_type: mediaType });
 	}
 
 	/**
@@ -727,8 +778,8 @@ export class SyncManager {
 		url: string,
 		headers: Record<string, string> | undefined,
 		title: string,
-		isWeChat: boolean,
 		mediaId: string,
+		wechatConverter?: (html: string, url: string) => HtmlToMdResult,
 	): Promise<string> {
 		try {
 			// 构建基础请求头（requestUrl 不支持自定义 UA/Referer，会被 Chromium 安全策略剥离）
@@ -772,10 +823,9 @@ export class SyncManager {
 				html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 			}
 
-			const result = convertHtmlToMarkdown(html, {
-				url,
-				contentSelector: isWeChat ? '#js_content' : undefined,
-			});
+			const result = wechatConverter
+				? wechatConverter(html, url)
+				: convertHtmlToMarkdown(html, { url });
 
 			const frontmatter = this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl);
 
@@ -783,6 +833,10 @@ export class SyncManager {
 			const effectiveTitle = result.title || title;
 			if (effectiveTitle) {
 				parts.push(`# ${effectiveTitle}\n`);
+			}
+			if (result.fromMeta) {
+				// 微信 meta 提取路径缺图片，添加提示 / Meta extraction path lacks images, add warning
+				parts.push(`> [!warning] 微信技术限制，本文图片未能自动提取。点击[原文链接](${url})查看完整图文。\n`);
 			}
 			if (result.content) {
 				parts.push(result.content);
