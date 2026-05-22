@@ -932,12 +932,6 @@ export class SyncManager {
 				html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 			}
 
-			// 方案 B：微信 URL 检测 #js_content，缺失则直接走占位
-			// Strategy B: detect #js_content for WeChat URLs, missing → placeholder
-			if (wechatConverter && !html.includes('id="js_content"') && !html.includes("id='js_content'")) {
-				throw new Error('WeChat js_content missing — degraded content');
-			}
-
 			const result = wechatConverter
 				? wechatConverter(html, url)
 				: convertHtmlToMarkdown(html, { url });
@@ -949,9 +943,15 @@ export class SyncManager {
 			if (effectiveTitle) {
 				parts.push(`# ${effectiveTitle}\n`);
 			}
+			// 方案 B：微信 URL 非 Tier 1 提取 → 标记降级、追踪到 Sync Issues
+			// Strategy B: WeChat URL not Tier 1 extraction → mark degraded, track for Sync Issues
+			const isWeChatDegraded = wechatConverter && (result.fromMeta || !html.includes('id="js_content"'));
 			if (result.fromMeta) {
 				// 微信 meta 提取路径缺图片，添加提示 / Meta extraction path lacks images, add warning
 				parts.push(`> [!warning] 微信技术限制，本文图片未能自动提取。点击[原文链接](${url})查看完整图文。\n`);
+			}
+			if (isWeChatDegraded) {
+				this.trackPlaceholderIssue(title, url);
 			}
 			if (result.content) {
 				parts.push(result.content);
