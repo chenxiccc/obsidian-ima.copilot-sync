@@ -64,6 +64,7 @@ export class SyncManager {
 		private readonly settings: ImaPluginSettings,
 		private readonly saveSettings: () => Promise<void>,
 		private readonly resolveCredentials: () => { clientId: string | null; apiKey: string | null },
+		private readonly onSyncStateChange?: (syncing: boolean) => void,
 	) {
 		this.fileDownloader = new FileDownloader(vault);
 		this.imageHandler = new ImageHandler(vault, this.fileDownloader);
@@ -106,6 +107,7 @@ export class SyncManager {
 		}
 
 		this.isSyncing = true;
+		this.onSyncStateChange?.(true);
 		new Notice('ima.copilot sync: 开始同步…');
 
 		try {
@@ -116,6 +118,7 @@ export class SyncManager {
 			new Notice(`ima.copilot Sync: 同步失败 — ${formatImaError(err)}`);
 		} finally {
 			this.isSyncing = false;
+			this.onSyncStateChange?.(false);
 		}
 	}
 

@@ -1,9 +1,30 @@
-import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath } from 'obsidian';
+import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath, addIcon } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
 import { initDebugLog, setDebugLogEnabled } from './ima-client';
 
 // ─── 插件主类 / Main plugin class ────────────────────────────────────────────
+
+/** Ribbon 自定义图标 ID / Custom ribbon icon ID */
+const RIBBON_ICON_ID = 'ima-sync-icon';
+
+/** 切换图标 SVG：panda（空闲时显示）+ refresh-cw（同步时显示并旋转）/ Toggle icon SVG: panda (shown when idle) + refresh-cw (shown and rotating when syncing) */
+const RIBBON_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <g class="ima-sync-panda">
+    <path d="M11.25 17.25h1.5L12 18z"/>
+    <path d="m15 12 2 2"/>
+    <path d="M18 6.5a.5.5 0 0 0-.5-.5"/>
+    <path d="M20.69 9.67a4.5 4.5 0 1 0-7.04-5.5 8.35 8.35 0 0 0-3.3 0 4.5 4.5 0 1 0-7.04 5.5C2.49 11.2 2 12.88 2 14.5 2 19.47 6.48 22 12 22s10-2.53 10-7.5c0-1.62-.48-3.3-1.3-4.83"/>
+    <path d="M6 6.5a.495.495 0 0 1 .5-.5"/>
+    <path d="m9 12-2 2"/>
+  </g>
+  <g class="ima-sync-refresh">
+    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+    <path d="M21 3v5h-5"/>
+    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+    <path d="M8 16H3v5"/>
+  </g>
+</svg>`;
 
 export default class ImaPlugin extends Plugin {
 	settings: ImaPluginSettings = { ...DEFAULT_SETTINGS };
@@ -12,6 +33,8 @@ export default class ImaPlugin extends Plugin {
 	private preImaEditorState: { mode: string; source: boolean | undefined } | null = null;
 	/** 当前活跃 leaf 是否在 IMA 文件夹内 / Whether the active leaf is currently inside an IMA file */
 	private isInImaFolder = false;
+	/** Ribbon 图标 DOM 元素（用于旋转动画）/ Ribbon icon DOM element (for rotation animation) */
+	private ribbonIconEl!: HTMLElement;
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
@@ -27,10 +50,18 @@ export default class ImaPlugin extends Plugin {
 			this.settings,
 			() => this.saveSettings(),
 			() => this.resolveCredentials(),
+			(syncing: boolean) => {
+				if (syncing) {
+					this.ribbonIconEl.classList.add("ima-ribbon-syncing");
+				} else {
+					this.ribbonIconEl.classList.remove("ima-ribbon-syncing");
+				}
+			},
 		);
 
 		// ── Ribbon 手动同步按钮 / Ribbon manual sync button ─────────────────
-		this.addRibbonIcon('refresh-cw', 'ima.copilot Sync：立即同步', () => {
+		addIcon(RIBBON_ICON_ID, RIBBON_ICON_SVG);
+		this.ribbonIconEl = this.addRibbonIcon(RIBBON_ICON_ID, 'ima.copilot Sync：立即同步', () => {
 			void this.triggerSync();
 		});
 

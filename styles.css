@@ -132,3 +132,30 @@
 .ima-hidden {
 	display: none;
 }
+
+/* ── Ribbon 同步图标：空闲 panda / 同步 refresh-cw 旋转 / Ribbon icon: panda idle / refresh-cw spinning when syncing ── */
+
+/* 默认：显示 panda，隐藏 refresh-cw / Default: show panda, hide refresh-cw */
+.ima-sync-refresh {
+	display: none;
+}
+
+/* 同步中：隐藏 panda，显示并旋转 refresh-cw / Syncing: hide panda, show rotating refresh-cw */
+.ima-ribbon-syncing .ima-sync-panda {
+	display: none;
+}
+
+.ima-ribbon-syncing .ima-sync-refresh {
+	display: inline;
+	animation: ima-spin 1.5s linear infinite;
+	transform-origin: 12px 12px;
+}
+
+@keyframes ima-spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}
