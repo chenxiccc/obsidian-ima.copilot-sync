@@ -143,10 +143,14 @@ fetch HTML（所有微信 URL 统一入口，不再区分长链短链）
 
 ### 图片提取
 
-`extractWeChatImages()` 采用双路径策略：
-1. DOM 搜索 `<img>` 标签，通过 `from=appmsg` 过滤正文图片（排除推荐缩略图）
-2. `cdn_url` 正则匹配 `picture_page_info_list` 中的隐藏图片（轮播中不可见的图）
-3. URL 标准化去重（去除查询参数避免不同子域名重复）
+`extractWeChatImages()` 采用双路径策略，经历了多轮迭代才稳定。详见 [1-synthetic-puddle.md](../../.claude/plans/1-synthetic-puddle.md#图片提取踩坑记录)。
+
+核心要点：
+1. **DOM `<img>` 搜索**：通过 `from=appmsg` 查询参数过滤正文图片（排除推荐缩略图），避免 `pic_blank.gif` 和 `res.wx.qq.com/mmbizappmsg` 系统资源
+2. **`cdn_url` 正则**：匹配 `picture_page_info_list` 中 JS 内嵌的图片 URL（轮播隐藏图不在 DOM 中，只能用此路径拿到）
+3. **URL 标准化去重**：`normalizeImgUrl()` 去除查询参数只留 `origin + pathname`，避免 `sz_mmbiz_jpg` vs `mmbiz_jpg` 不同子域名产生重复
+4. **已有内容去重**：先扫描 `existingContent` 中已有 Markdown 图片，加入 `seen` 集合，防止 defuddle 已提取的图片被重复追加
+5. **文件名稳定性**：`shortHash()` 替代 `/0` 结尾 URL 的长 hash，生成 8 字符短文件名；移除 `sanitizeFilename` 的 100 字符截断（会切断 `.png` 扩展名）
 
 ### 选择器来源
 
