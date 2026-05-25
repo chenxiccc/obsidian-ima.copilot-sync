@@ -64,7 +64,7 @@ obsidian vault="Obsidian" dev:errors
 | `src/ima-client.ts`      | IMA API HTTP 封装（认证、分页、错误处理、get_media_info）                                               |
 | `src/sync-manager.ts`    | 同步编排：列表→get_media_info→按类型分发→写文件→修复残留图片                                        |
 | `src/image-handler.ts`   | 图片下载、附件路径解析、链接格式化                                                                      |
-| `src/html-to-md.ts`      | HTML → Markdown 转换器（基于 defuddle**私有版本**，含 `authorURL` 支持、微信文章四层回退提取、多格式内容检测、图片提取补充） |
+| `src/html-to-md.ts`      | HTML → Markdown 转换器（基于 defuddle**私有版本**，含 `authorURL` 支持、微信文章四层回退提取、多格式内容检测、图片提取补充、小红书文章提取） |
 | `src/headless-extractor.ts` | 无头浏览器提取器（Electron BrowserWindow，仅桌面端）——微信文章 JS 渲染页面通过隐藏窗口加载后提取完整 DOM |
 | `src/file-downloader.ts` | 通用文件下载器（含反盗链 requestUrl + Node.js https.get 兜底）                                          |
 | `src/path-utils.ts`      | 共享工具函数：文件名清理、路径计算、CHROME_UA 常量、`buildStableFilename`、`shortHash`、共享类型定义（`AttachmentOptions`、`LinkFormat` 等） |

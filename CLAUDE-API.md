@@ -268,4 +268,13 @@ ima skills 1.1.7 新增 `get_media_info` 接口，可根据 `media_id` 获取知
     - **短链**：`https://mp.weixin.qq.com/s/XXXXX`（路径形式）—— defuddle 可正常抓取
     - **长链**：`https://mp.weixin.qq.com/s?__biz=...`（含 `__biz` 参数）—— 微信路由层拦截，无 session cookie 时 302 到验证码页，**无法绕过**；headless BrowserWindow 渲染后可能通过验证，但静态 HTTP 请求 100% 失败
 
+- **小红书文章（type 2，v4.8.0 新增）**：
+  - 小红书被 IMA 归类为 `media_type=2`（普通网页），URL 域名为 `xiaohongshu.com` / `xhslink.com`
+  - **SSR 页面**：静态 HTML 中包含完整内容，**不需要 headless BrowserWindow**
+  - 文本提取：defuddle + `#detail-desc` 选择器
+  - 图片提取：解析 `<script>window.__INITIAL_STATE__={...}</script>` JSON → `note.noteDetailMap[*].note.imageList[].urlDefault`
+  - 反爬：`xhslink.com` 短链会 302 到长链，长链包含 `xsec_token` 参数（`requestUrl` 自动跟随重定向，保持参数）
+  - 代码：`html-to-md.ts` `convertXiaohongshuHtmlToMarkdown` → `extractXiaohongshuImages`
+  - 路由：`syncByMediaType` 通过 `isXiaohongshuUrl()` 域名检测
+
 

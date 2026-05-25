@@ -117,7 +117,19 @@ fetch HTML（所有微信 URL 统一入口，不再区分长链短链）
 
 ### 方案
 
-增加 Tier 4 回退：在 `syncWebContent` 中，当静态提取质量不足时（`fromMeta`、无 WeChat 内容容器、图片丢失、或大 HTML 但短内容），使用 Electron `BrowserWindow`（`show: false`，隐藏窗口）渲染页面后提取完整 DOM，再经 `convertWeChatHtmlToMarkdown` 转换。
+增加 Tier 4 回退：在 `syncWebContent` 中，当静态提取质量不足时，使用 Electron `BrowserWindow`（`show: false`，隐藏窗口）渲染页面后提取完整 DOM，再经 `convertWeChatHtmlToMarkdown` 转换。**仅对 `mp.weixin.qq.com` 页面生效**（`isWeChatPage` 守卫）。
+
+### Headless 触发条件
+
+`syncWebContent` 中有 5 个条件决定是否触发 headless，**全部满足 `isWeChatPage` 前置检查**：
+
+| 条件 | 变量 | 说明 |
+|---|---|---|
+| Meta 提取 | `result.fromMeta` | Tier 2 降级提取的文本，缺图片 |
+| 无已知容器 | `!HeadlessExtractor.hasWeChatContent(html)` | 静态 HTML 不含任何微信内容容器 |
+| 内容过短 | `contentTooShort` | 提取内容 < 120 字符 |
+| 图片丢失 | `hasOrphanImages` | HTML 有 mmbiz `<img>` 但 Markdown 没图 |
+| JS 空壳页面 | `looksLikeJsPage` | HTML >500KB 但内容 <2000 字符 → 疑似 JS 渲染页面 |
 
 ### 关键设计
 
@@ -155,3 +167,34 @@ fetch HTML（所有微信 URL 统一入口，不再区分长链短链）
 ### 选择器来源
 
 `WECHAT_CONTENT_SELECTORS` 数组定义在 `html-to-md.ts` 并导出，`headless-extractor.ts` 从 `html-to-md.ts` 导入——单一来源，避免双文件漂移。
+
+### 设置合并（v4.8.0）
+
+`antiHotlinkEnhanced`（防盗链下载增强）和 `headlessExtraction`（无头浏览器提取）合并为单一设置项 `downloadEnhanced`（"下载增强（仅限桌面端）"）。桌面端默认开启，移动端可见但不可用。同时控制 Node.js https 回退和 headless BrowserWindow 两个功能。
+
+## 小红书文章提取（v4.8.0）
+
+### 问题
+
+小红书文章走通用网页路径（`media_type=2`）。由于图片 URL 存储在 `window.__INITIAL_STATE__` JSON 中（`imageList` 数组），不在任何 `<img>` 标签内，通用 defuddle 无法提取图片。
+
+### 方案
+
+与微信不同，小红书是 **SSR（服务端渲染）**——静态 HTML 中已包含完整的 `__INITIAL_STATE__` JSON，**不需要 headless BrowserWindow**。
+
+- **文本**：defuddle + `contentSelector: '#detail-desc'`
+- **图片**：正则匹配 `window.__INITIAL_STATE__ = {...}` → JSON.parse → `imageList[].urlDefault`
+- **路由**：`syncByMediaType` 中通过 `isXiaohongshuUrl()` 检测 `xiaohongshu.com` / `xhslink.com` 域名
+
+### headless 不会触发
+
+`isWeChatPage` 守卫确保 headless 只对 `mp.weixin.qq.com` 生效。小红书 URL 不匹配 → 不触发 → 无 false warning。
+
+### 转换器路由总览
+
+```
+syncByMediaType(params.url, mediaType)
+├─ mediaType === 6 (WeChat) → convertWeChatHtmlToMarkdown
+├─ isXiaohongshuUrl(url)     → convertXiaohongshuHtmlToMarkdown
+└─ 其他                       → convertHtmlToMarkdown (通用)
+```
