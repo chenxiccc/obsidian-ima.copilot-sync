@@ -430,6 +430,11 @@ export class SyncManager {
 				const itemFolder = item.folderPath
 					? normalizePath(`${kbFolder}/${item.folderPath}`)
 					: kbFolder;
+				// 防御路径穿越：确保最终路径在 kbFolder 下 / Guard against path traversal
+				if (!itemFolder.startsWith(kbFolder + '/') && itemFolder !== kbFolder) {
+					console.warn(`ima.copilot Sync: 拒绝路径穿越 / Path traversal blocked: ${item.folderPath}`);
+					continue;
+				}
 				await ensureFolder(this.vault, itemFolder);
 				const filename = sanitizeFilename(item.title || item.media_id);
 				const filePath = normalizePath(`${itemFolder}/${filename}.md`);
@@ -681,9 +686,19 @@ export class SyncManager {
 	 */
 	private prependFrontmatterField(content: string, key: string, value: string): string {
 		if (content.startsWith('---')) {
-			const closeIdx = content.indexOf('---', 3);
-			if (closeIdx > 0) {
-				return content.slice(0, closeIdx) + `${key}: "${value}"\n` + content.slice(closeIdx);
+			// 逐行扫描找结束 ---，避免值内含 --- 误判
+			// Line-by-line scan for closing ---, avoiding false match on --- inside values
+			const lines = content.split('\n');
+			let fmDelimiterCount = 0;
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i]?.trim() === '---') {
+					fmDelimiterCount++;
+					if (fmDelimiterCount === 2) {
+						const before = lines.slice(0, i).join('\n');
+						const after = lines.slice(i).join('\n');
+						return before + `\n${key}: "${value}"\n` + after;
+					}
+				}
 			}
 		}
 		return `---\n${key}: "${value}"\n---\n\n${content}`;
