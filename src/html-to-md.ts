@@ -190,28 +190,52 @@ function extractWeChatMetaContent(
  * WeChat articles use multiple page templates: standard #js_content, image share .share_content_page, etc.
  */
 function detectWeChatContentSelector(doc: Document): string | null {
-	// 标准文章格式 / Standard article format
+	// 与 headless-extractor.ts WECHAT_CONTENT_SELECTORS 保持同步
+	// Keep in sync with WECHAT_CONTENT_SELECTORS in headless-extractor.ts
+
+	// 标准图文（需足够文本，防止空壳 div 误判）/ Standard article (must have enough text)
 	const jsContent = doc.getElementById('js_content');
 	if (jsContent && (jsContent.textContent?.trim().length || 0) > 50) {
 		return '#js_content';
 	}
-	// 图片分享页格式（如图片合集，内容以图为主文字少，放宽文本阈值）
-	// Image share page format (e.g. image collections, mostly images, lenient text threshold)
+	// 图片分享页（文本少但图多）/ Image share page (little text but many images)
 	const shareContent = doc.querySelector('.share_content_page');
 	if (shareContent) {
 		const textLen = shareContent.textContent?.trim().length || 0;
 		const imgCount = shareContent.querySelectorAll('img').length;
-		// 有足够文本或多张图片 / Has enough text or multiple images
-		if (textLen > 30 || imgCount >= 2) {
-			return '.share_content_page';
-		}
+		if (textLen > 30 || imgCount >= 2) return '.share_content_page';
 	}
-	// 富文本内容区 / Rich media content area
+	// 小说卡片（嵌入标准图文中）/ Novel card (embedded in standard articles)
+	const novelCard = doc.getElementById('js_novel_card');
+	if (novelCard && novelCard.textContent?.trim()) {
+		return '#js_novel_card';
+	}
+	// 视频消息 — 有标题即认为有效（正文在 og:description 中）/ Video article
+	const videoTitle = doc.getElementById('js_video_page_title');
+	if (videoTitle && videoTitle.textContent?.trim()) {
+		return '#js_video_page_title';
+	}
+	// 音频消息 / Audio article
+	const audioTitle = doc.getElementById('js_audio_title');
+	if (audioTitle && audioTitle.textContent?.trim()) {
+		return '#js_audio_title';
+	}
+	// 富文本后备 / Rich media fallback
 	const richMedia = doc.getElementById('js_image_content') || doc.querySelector('.rich_media_content');
 	if (richMedia && (richMedia.textContent?.trim().length || 0) > 30) {
 		return richMedia.id ? `#${richMedia.id}` : '.rich_media_content';
 	}
 	return null;
+}
+
+/**
+ * 检测是否为微信验证/拦截页（非真实文章）
+ * Check if the page is a WeChat verification/block page (not a real article)
+ */
+function isWeChatBlockPage(doc: Document): boolean {
+	return !!doc.querySelector('.weui-msg')
+		|| (doc.body?.textContent || '').includes('环境异常')
+		|| /TCaptcha/i.test(doc.body?.innerHTML || '');
 }
 
 /**
@@ -221,72 +245,93 @@ function detectWeChatContentSelector(doc: Document): string | null {
  * 用于弥补 defuddle 对图片分享页等格式过滤图片的缺陷
  * Compensates for defuddle filtering images in formats like image share pages
  */
-function extractWeChatImages(html: string, doc: Document): string {
+function extractWeChatImages(html: string, doc: Document, existingContent: string): string {
+	const seen = new Set<string>();
 	const parts: string[] = [];
-	// 从已知内容容器中提取图片 / Extract images from known content containers
-	const containers = [
-		doc.getElementById('js_content'),
-		doc.querySelector('.share_content_page'),
-		doc.querySelector('.rich_media_content'),
-	].filter(Boolean);
 
-	for (const container of containers) {
-		const imgs = Array.from(container!.querySelectorAll('img'));
-		for (const img of imgs) {
-			// 优先 data-src（微信懒加载），回退 src / Prefer data-src (WeChat lazy load), fallback src
-			const imgUrl = img.getAttribute('data-src') || img.src;
-			if (imgUrl && /^https?:\/\//.test(imgUrl) && !imgUrl.includes('pic_blank.gif')) {
-				const alt = (img as HTMLImageElement).alt || '';
-				parts.push(`![${alt}](${imgUrl})`);
-			}
-		}
+	// 先收集已有 Markdown 中的图片 URL 用于去重 / Collect existing Markdown image URLs for dedup
+	const mdImgRegex = /!\[.*\]\((https?:\/\/[^)]+)\)/g;
+	let mdMatch: RegExpExecArray | null;
+	while ((mdMatch = mdImgRegex.exec(existingContent)) !== null) {
+		if (mdMatch[1]) seen.add(mdMatch[1]);
 	}
 
-	// 也搜索 data-src 模式（可能不在图片标签内）/ Also search data-src pattern outside img tags
-	const dataSrcRegex = /data-src="(https?:\/\/[^"]+?(?:mmbiz|qpic)\[^"]+?)"/gi;
-	let match;
-	while ((match = dataSrcRegex.exec(html)) !== null) {
-		const imgUrl = match[1] as string;
-		if (!parts.some(p => p.includes(imgUrl))) {
+	// 全 DOM 搜索 img 标签 / Search all img tags in DOM
+	for (const img of Array.from(doc.querySelectorAll('img'))) {
+		const imgUrl = img.getAttribute('data-src') || img.src;
+		if (!imgUrl || !/^https?:\/\//.test(imgUrl)) continue;
+		// 过滤系统资源 / Filter system resources
+		if (imgUrl.includes('pic_blank.gif')) continue;
+		if (imgUrl.includes('res.wx.qq.com/mmbizappmsg')) continue;
+		if (seen.has(imgUrl)) continue;
+		seen.add(imgUrl);
+		parts.push(`![${(img as HTMLImageElement).alt || ''}](${imgUrl})`);
+	}
+
+	// data-src 模式补充（可能在非 img 标签内）/ data-src supplement (may be in non-img tags)
+	const dataSrcRegex = /data-src="(https?:\/\/[^"]+?(?:mmbiz|qpic)[^"]+?)"/gi;
+	let dsMatch;
+	while ((dsMatch = dataSrcRegex.exec(html)) !== null) {
+		const imgUrl = dsMatch[1] as string;
+		if (!seen.has(imgUrl)) {
+			seen.add(imgUrl);
 			parts.push(`![](${imgUrl})`);
 		}
 	}
 
-	return parts.length > 0 ? '\n' + parts.join('\n') + '\n' : '';
+	return parts.length > 0 ? parts.join('\n') + '\n' : '';
 }
 
 export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToMdResult {
 	const parser = new DOMParser();
 	const doc = parser.parseFromString(html, 'text/html');
 
-	// Tier 1: 尝试已知的内容容器 / Try known content containers
+	// 拦截页快速返回空内容，让调用方进入 headless 或兜底
+	// Block page fast return empty content, let caller fall back to headless or placeholder
+	if (isWeChatBlockPage(doc)) {
+		return { title: '', author: '', published: '', content: '' };
+	}
+
+	let result: HtmlToMdResult;
+
+	// Tier 1: 已知内容容器 / Known content containers
 	const selector = detectWeChatContentSelector(doc);
 	if (selector) {
-		const result = convertHtmlToMarkdown(html, { url, contentSelector: selector, doc });
-		// 补充 defuddle 可能过滤掉的图片 / Supplement images defuddle may have filtered
-		const imagesMarkdown = extractWeChatImages(html, doc);
-		if (imagesMarkdown && result.content) {
-			result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
+		result = convertHtmlToMarkdown(html, { url, contentSelector: selector, doc });
+	} else {
+		// Tier 2: og:description meta 提取 / meta tag extraction
+		const metaResult = extractWeChatMetaContent(doc);
+		if (metaResult) {
+			const r = convertHtmlToMarkdown(metaResult.bodyHtml, { url });
+			const publishedFromCt = extractWeChatPublishTime(html);
+			result = {
+				title: r.title || metaResult.title,
+				author: r.author,
+				authorUrl: r.authorUrl,
+				published: r.published || publishedFromCt || '',
+				content: r.content,
+				fromMeta: true,
+			};
+		} else {
+			// Tier 3: 裸 defuddle（内部已对微信 URL 调用 extractWeChatPublishTime）
+			// Tier 3: bare defuddle (internally calls extractWeChatPublishTime for WeChat URLs)
+			result = convertHtmlToMarkdown(html, { url });
 		}
-		return result;
 	}
 
-	// Tier 2: meta 标签提取
-	// Tier 2: meta tag extraction
-	const metaResult = extractWeChatMetaContent(doc);
-	if (metaResult) {
-		const result = convertHtmlToMarkdown(metaResult.bodyHtml, { url });
-		const publishedFromCt = extractWeChatPublishTime(html);
-		return {
-			title: result.title || metaResult.title,
-			author: result.author,
-			published: result.published || publishedFromCt || '',
-			content: result.content,
-			fromMeta: true,
-		};
+	// 所有路径统一补充图片 + 去重 / Supplement images for ALL paths with dedup
+	const resultContent = result.content || '';
+	const imagesMarkdown = extractWeChatImages(html, doc, resultContent);
+	if (imagesMarkdown && resultContent) {
+		result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
+		// Tier 2 (og:description) 补到图后清除 fromMeta，避免 headless 冗余触发
+		// Tier 2 (og:description) got images — clear fromMeta to avoid redundant headless
+		// Tier 1/3 的 fromMeta 保持原值（undefined），让 hasOrphanImages 继续生效
+		// Tier 1/3 keep original fromMeta (undefined) so hasOrphanImages can still trigger headless
+		if (result.fromMeta) {
+			result.fromMeta = false;
+		}
 	}
 
-	// Tier 3: 裸 defuddle（内部已对微信 URL 调用 extractWeChatPublishTime）
-	// Tier 3: bare defuddle (internally calls extractWeChatPublishTime for WeChat URLs)
-	return convertHtmlToMarkdown(html, { url });
+	return result;
 }

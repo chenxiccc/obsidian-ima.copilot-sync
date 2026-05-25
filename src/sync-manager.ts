@@ -917,8 +917,14 @@ export class SyncManager {
 			const contentTooShort = result.content && result.content.trim().length < 120;
 			// HTML 含 <img> 但提取结果中无 Markdown 图片 → 图片丢失，需 headless
 			// HTML has <img> tags but extracted Markdown has no images → images lost, need headless
-			const hasOrphanImages = /<img[^>]+src=["'"]https?:\/\/[^'"]+mmbiz[^'"]*['"]/i.test(html) && !/!\[.*\]\(https?:\/\/[^)]+mmbiz[^)]+\)/.test(result.content || '');
-			if (wechatConverter && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages)) {
+			const htmlHasMmBizImgs = /<img[^>]+src=["']https?:\/\/[^"']+mmbiz[^"']*["']/i.test(html);
+			const mdHasImages = /!\[.*\]\(https?:\/\//.test(result.content || '');
+			// 静态 HTML 有图但 Markdown 没图 / Static HTML has images but Markdown doesn't
+			const hasOrphanImages = htmlHasMmBizImgs && !mdHasImages;
+			// 静态 HTML 很大（>500KB JS）但提取内容很短（<2000 chars）→ JS 渲染页面，headless 可能有更多内容
+			// Large static HTML (>500KB JS) but short extracted content (<2000 chars) → JS-rendered page, headless may yield more
+			const looksLikeJsPage = html.length > 500_000 && (result.content?.trim().length || 0) < 2000;
+			if (wechatConverter && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
 				if (this.settings.headlessExtraction) {
 					console.debug(`ima.copilot Sync: Headless trigger fromMeta=${result.fromMeta} contentLen=${result.content?.length||0}`);
