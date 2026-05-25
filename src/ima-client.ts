@@ -269,27 +269,6 @@ export class ImaClient {
 	}
 
 	/**
-	 * 获取可添加内容的知识库列表
-	 * Get list of knowledge bases the user can add content to
-	 */
-	async listKnowledgeBases(): Promise<AddableKnowledgeBaseInfo[]> {
-		const bases: AddableKnowledgeBaseInfo[] = [];
-		let cursor = '';
-
-		while (true) {
-			const result = await this.post<ListAddableKBResponse>(
-				'openapi/wiki/v1/get_addable_knowledge_base_list',
-				{ cursor, limit: 50 },
-			);
-			bases.push(...result.addable_knowledge_base_list);
-			if (result.is_end) break;
-			cursor = result.next_cursor;
-		}
-
-		return bases;
-	}
-
-	/**
 	 * 搜索/列出知识库，含 base_type 区分订阅/个人
 	 * Search/list knowledge bases, with base_type distinguishing subscribed/personal
 	 */
@@ -332,22 +311,6 @@ export class ImaClient {
 	}
 
 	/**
-	 * 从知识库条目的 media_id 提取笔记 doc_id
-	 * 格式：note_<userId>_<docId>，提取最后一个 _ 之后的部分
-	 * Extract note doc_id from knowledge item's media_id
-	 * Format: note_<userId>_<docId>, extract the part after the last _
-	 */
-	extractDocIdFromMediaId(mediaId: string): string | null {
-		// media_id 格式：note_<userId>_<docId>
-		// 只取最后一个 _ 之后的内容作为 docId
-		// media_id format: note_<userId>_<docId>
-		// Only take the part after the last _ as docId
-		if (!mediaId.startsWith('note_')) return null;
-		const lastUnder = mediaId.lastIndexOf('_');
-		if (lastUnder < 0) return null;
-		return mediaId.slice(lastUnder + 1);
-	}
-
 	/**
 	 * 获取知识库条目的媒体信息（含访问 URL 或笔记 ID）
 	 * Get media info for a knowledge base item (includes access URL or note ID)
@@ -362,20 +325,6 @@ export class ImaClient {
 			url_info: data.url_info,
 			notebook_ext_info: data.notebook_ext_info,
 		};
-	}
-
-	/**
-	 * 通过加密 kb_id 获取知识库信息（含数字 KB ID）
-	 * Get KB info by encrypted kb_id (includes numeric KB ID)
-	 */
-	async getKnowledgeBaseInfo(encryptedKbId: string): Promise<{ id: string; name: string }> {
-		const data = await this.post<{ infos: Record<string, { id: string; name: string }> }>(
-			'openapi/wiki/v1/get_knowledge_base',
-			{ ids: [encryptedKbId] },
-		);
-		const info = data.infos?.[encryptedKbId];
-		if (!info?.id) throw new Error(`知识库信息获取失败：${encryptedKbId}`);
-		return info;
 	}
 
 	/**
@@ -594,19 +543,6 @@ export class ImaPublicClient {
 			folderId,
 			folderPath,
 		);
-	}
-
-	/**
-	 * 在指定文件夹中查找单个条目（用于重试时重新获取 parse_progress）
-	 * Find a single item in the specified folder (for re-checking parse_progress during retry)
-	 */
-	async getItemByMediaId(
-		numericKbId: string,
-		folderId: string,
-		mediaId: string,
-	): Promise<PublicKBItem | null> {
-		const result = await this.getKnowledgeListPublic(numericKbId, folderId, '', 50);
-		return result.knowledge_list.find(i => i.media_id === mediaId) ?? null;
 	}
 
 	/**
