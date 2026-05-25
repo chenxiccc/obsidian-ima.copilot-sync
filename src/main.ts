@@ -1,7 +1,6 @@
 import { Plugin, MarkdownView, WorkspaceLeaf, normalizePath, addIcon } from 'obsidian';
 import { DEFAULT_SETTINGS, ImaPluginSettings, ImaSettingTab, SECRET_ID_CLIENT, SECRET_ID_API_KEY } from './settings';
 import { SyncManager } from './sync-manager';
-import { initDebugLog, setDebugLogEnabled } from './ima-client';
 
 // ─── 插件主类 / Main plugin class ────────────────────────────────────────────
 
@@ -37,11 +36,6 @@ export default class ImaPlugin extends Plugin {
 	private ribbonIconEl!: HTMLElement;
 	async onload(): Promise<void> {
 		await this.loadSettings();
-
-		// 初始化调试日志路径，并按设置同步开关状态
-		// Initialize debug log path and sync toggle state from settings
-		initDebugLog(this);
-		setDebugLogEnabled(this.settings.enableDebugLog);
 
 		// 初始化同步管理器 / Initialize sync manager
 		this.syncManager = new SyncManager(
@@ -239,7 +233,7 @@ export default class ImaPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		// 设置保存时同步更新日志开关 / Sync debug log toggle when settings saved
-		setDebugLogEnabled(this.settings.enableDebugLog);
+		this.syncManager.setDebugEnabled(this.settings.enableDebugLog);
 	}
 
 	/**

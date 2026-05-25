@@ -1,34 +1,8 @@
-import { requestUrl, Plugin } from 'obsidian';
+import { requestUrl } from 'obsidian';
 import type { DataAdapter } from 'obsidian';
 
 // IMA API base URL / IMA API 基础地址
 const BASE_URL = 'https://ima.qq.com';
-
-// 调试日志文件路径（vault 内相对路径）/ Debug log file path (relative within vault)
-let debugLogPath = '';
-// 是否启用调试日志 / Whether debug logging is enabled
-let debugLogEnabled = false;
-// vault adapter 引用（用于写日志）/ Vault adapter reference (for writing log)
-let debugAdapter: DataAdapter | null = null;
-
-/** 初始化日志路径 / Initialize log path */
-export function initDebugLog(plugin: Plugin): void {
-	debugAdapter = plugin.app.vault.adapter;
-	debugLogPath = `${plugin.app.vault.configDir}/plugins/ima-copilot-sync/ima-debug.log`;
-}
-
-/** 更新调试日志开关 / Update debug log enabled state */
-export function setDebugLogEnabled(enabled: boolean): void {
-	debugLogEnabled = enabled;
-}
-
-/** 追加写入调试日志（仅在开关开启时有效）/ Append to debug log (only when enabled) */
-function debugLog(msg: string): void {
-	if (!debugLogEnabled || !debugLogPath || !debugAdapter) return;
-	const line = `[${new Date().toISOString()}] ${msg}\n`;
-	// 使用 vault adapter 写日志，跨平台兼容 / Use vault adapter for cross-platform log writing
-	void debugAdapter.append(debugLogPath, line);
-}
 
 // ─── 数据类型定义 / Data type definitions ───────────────────────────────────
 
@@ -181,10 +155,32 @@ export function isImaApiError(err: unknown, code?: number): err is ImaApiError {
 // ─── IMA API 客户端 / IMA API client ────────────────────────────────────────
 
 export class ImaClient {
+	private debugPath = '';
+	private debugAdapter: DataAdapter | null = null;
+	private debugEnabled = false;
+
 	constructor(
 		private readonly clientId: string,
 		private readonly apiKey: string,
-	) {}
+		debug?: { adapter: DataAdapter; path: string },
+	) {
+		if (debug) {
+			this.debugAdapter = debug.adapter;
+			this.debugPath = debug.path;
+		}
+	}
+
+	/** 更新调试日志开关（由 settings 调用）/ Set debug log enabled (called from settings) */
+	setDebugEnabled(enabled: boolean): void {
+		this.debugEnabled = enabled;
+	}
+
+	/** 追加写入调试日志 / Append to debug log */
+	private debugLog(msg: string): void {
+		if (!this.debugEnabled || !this.debugPath || !this.debugAdapter) return;
+		const line = `[${new Date().toISOString()}] ${msg}\n`;
+		void this.debugAdapter.append(this.debugPath, line);
+	}
 
 	/** 通用 POST 请求 / Generic POST request */
 	private async post<T>(path: string, body: unknown): Promise<T> {
@@ -201,8 +197,8 @@ export class ImaClient {
 		});
 
 		// 调试：记录真实响应 / Debug: log raw response
-		debugLog(`status=${response.status} path=${path}`);
-		debugLog(`text=${response.text}`);
+		this.debugLog(`status=${response.status} path=${path}`);
+		this.debugLog(`text=${response.text}`);
 
 		const result = response.json as ImaApiResponse<T>;
 
@@ -442,8 +438,8 @@ export class ImaPublicClient {
 			throw: false,
 		});
 
-		debugLog(`status=${response.status} path=${path}`);
-		debugLog(`text=${response.text}`);
+		console.debug(`ima.copilot Sync: status=${response.status} path=${path}`);
+		console.debug(`ima.copilot Sync: text=${response.text}`);
 
 		const result = response.json as { code?: number; msg?: string; data?: T };
 		const code = result.code ?? -1;

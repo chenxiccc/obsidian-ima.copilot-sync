@@ -59,6 +59,7 @@ export class SyncManager {
 	private fileDownloader: FileDownloader;
 	private isSyncing = false;
 	private headlessExtractor: HeadlessExtractor;
+	private debugConfig?: { adapter: import('obsidian').DataAdapter; path: string };
 
 	constructor(
 		private readonly app: App,
@@ -73,9 +74,17 @@ export class SyncManager {
 		this.headlessExtractor = new HeadlessExtractor();
 	}
 
+	setDebugConfig(config: { adapter: import('obsidian').DataAdapter; path: string }): void {
+		this.debugConfig = config;
+	}
+
+	setDebugEnabled(enabled: boolean): void {
+		this.client?.setDebugEnabled(enabled);
+	}
+
 	rebuildClient(): void {
 		const { clientId, apiKey } = this.resolveCredentials();
-		this.client = (clientId && apiKey) ? new ImaClient(clientId, apiKey) : null;
+		this.client = (clientId && apiKey) ? new ImaClient(clientId, apiKey, this.debugConfig) : null;
 	}
 
 	async syncOnce(): Promise<void> {
