@@ -1,5 +1,6 @@
 import { Platform } from 'obsidian';
 import { CHROME_UA } from './path-utils';
+import { WECHAT_CONTENT_SELECTORS } from './html-to-md';
 
 // electron 已由 esbuild external，运行时由 Obsidian Electron 环境解析 / electron is external in esbuild, resolved by Obsidian's Electron runtime
 
@@ -7,32 +8,6 @@ const LOAD_TIMEOUT_MS = 20_000;
 const CONTENT_POLL_INTERVAL_MS = 500;
 const CONTENT_POLL_MAX_MS = 10_000;
 const WECHAT_PARTITION = 'persist:ima-copilot-wechat';
-
-/**
- * 微信文章的各种内容容器选择器
- * Various WeChat article content container selectors
- *
- * 与 html-to-md.ts detectWeChatContentSelector() 保持同步
- * Keep in sync with detectWeChatContentSelector() in html-to-md.ts
- */
-const WECHAT_CONTENT_SELECTORS = [
-	// 标准图文 / Standard article (itemShowType=0)
-	'#js_content',
-	'.rich_media_content',
-	// 图片分享页 / Image share page (itemShowType=8)
-	'.share_content_page',
-	'#img_list',
-	// 视频消息 / Video article (itemShowType=5)
-	'#js_video_page_title',
-	// 音频消息 / Audio article (itemShowType=7)
-	'#js_audio_title',
-	'#audio_panel_area',
-	// 纯文字消息 / Text article (itemShowType=10) — 辅助检测，正文在 #js_content
-	'#js_text_title',
-	// 通用后备 / Generic fallback
-	'#img-content',
-	'.rich_media',
-];
 
 /**
  * 使用隐藏 Electron BrowserWindow 提取 JS 渲染后的页面 HTML

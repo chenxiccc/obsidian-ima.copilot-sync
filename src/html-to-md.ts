@@ -183,6 +183,20 @@ function extractWeChatMetaContent(
  * Tier 3: 裸 defuddle + extractWeChatPublishTime（最后尝试）
  */
 /**
+ * 微信文章内容容器选择器（唯一来源，headless-extractor.ts 从此导入）
+ * WeChat article content container selectors (single source, imported by headless-extractor.ts)
+ */
+export const WECHAT_CONTENT_SELECTORS = [
+	'#js_content', '.rich_media_content',
+	'.share_content_page', '#img_list',
+	'#js_video_page_title',
+	'#js_audio_title', '#audio_panel_area',
+	'#js_text_title',
+	'#js_novel_card',
+	'#img-content', '.rich_media',
+];
+
+/**
  * 检测微信页面中可用的内容容器选择器
  * Detect available WeChat page content container selector
  *
