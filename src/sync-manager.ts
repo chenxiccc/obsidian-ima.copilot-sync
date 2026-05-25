@@ -159,7 +159,7 @@ export class SyncManager {
 			fileSizeLimitBytes: this.calcSizeLimitBytes(this.settings.fileSizeLimit, this.settings.fileSizeLimitUnit),
 			kbName,
 			kbCategory,
-			antiHotlinkEnhanced: this.settings.antiHotlinkEnhanced,
+			antiHotlinkEnhanced: this.settings.downloadEnhanced,
 		};
 	}
 
@@ -783,7 +783,7 @@ export class SyncManager {
 			} catch (requestUrlErr) {
 				// requestUrl 失败，检查防盗链增强开关
 				// requestUrl failed, check anti-hotlink enhanced flag
-				if (!this.settings.antiHotlinkEnhanced) {
+				if (!this.settings.downloadEnhanced) {
 					throw requestUrlErr;
 				}
 
@@ -824,7 +824,7 @@ export class SyncManager {
 			const looksLikeJsPage = html.length > 500_000 && (result.content?.trim().length || 0) < 2000;
 			if (wechatConverter && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
-				if (this.settings.headlessExtraction) {
+				if (this.settings.downloadEnhanced) {
 					const headless = await this.tryHeadlessExtraction(url, wechatConverter);
 					if (headless) {
 						html = headless.html;
@@ -866,7 +866,7 @@ export class SyncManager {
 				console.warn(`ima.copilot Sync: All static extraction failed for "${title}": ${msg}`);
 
 				// 尝试 headless 作为最后手段 / Attempt headless as last resort
-				if (this.settings.headlessExtraction) {
+				if (this.settings.downloadEnhanced) {
 					try {
 						const headless = await this.tryHeadlessExtraction(url, convertWeChatHtmlToMarkdown);
 						if (headless) {

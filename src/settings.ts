@@ -72,10 +72,8 @@ export interface ImaPluginSettings {
 	publicKnowledgeBases: PublicKnowledgeBase[];
 	/** ima 文件强制阅读模式 / Force reading mode for ima files */
 	forceReadingMode: boolean;
-	/** 防盗链下载增强（Node.js https 回退，仅桌面端）/ Anti-hotlink download enhancement (Node.js https fallback, desktop only) */
-	antiHotlinkEnhanced: boolean;
-	/** 无头浏览器提取（仅桌面端）/ Headless browser extraction (desktop only) */
-	headlessExtraction: boolean;
+	/** 下载增强（仅桌面端，含防盗链回退 + 微信文章 headless 提取）/ Download enhancement (desktop only, includes anti-hotlink fallback + WeChat headless extraction) */
+	downloadEnhanced: boolean;
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
@@ -96,8 +94,7 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	fileSizeLimitUnit: 'MB',
 	publicKnowledgeBases: [],
 	forceReadingMode: true,
-	antiHotlinkEnhanced: true,
-	headlessExtraction: true,
+	downloadEnhanced: true,
 };
 
 // ─── 确认对话框（取消/删除知识库时询问是否清理本地文件）/ Confirm modal for KB removal ──
@@ -693,32 +690,17 @@ export class ImaSettingTab extends PluginSettingTab {
 			unitKey: 'fileSizeLimitUnit',
 		});
 
-		// ── 防盗链增强 / Anti-hotlink enhancement ────────────────────────────
+		// ── 下载增强（仅桌面端）/ Download enhancement (desktop only) ──────────
 
 		new Setting(containerEl)
-			.setName('防盗链下载增强')
-			.setDesc('开启后下载失败时自动使用 Node.js 回退重试，含图片、文件与网页抓取（仅桌面端有效）')
+			.setName('下载增强（仅限桌面端）')
+			.setDesc('对防盗链图片/文件和微信公众号内容非常有效。开启后下载失败时自动使用 Node.js 回退重试，微信文章静态抓取失败时使用无头浏览器渲染提取完整内容')
 			.addToggle(toggle => {
 				toggle
-					.setValue(Platform.isDesktop ? this.plugin.settings.antiHotlinkEnhanced : false)
+					.setValue(Platform.isDesktop ? this.plugin.settings.downloadEnhanced : false)
 					.setDisabled(!Platform.isDesktop)
 					.onChange(async value => {
-						this.plugin.settings.antiHotlinkEnhanced = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		// ── 无头浏览器提取 / Headless browser extraction ─────────────────────
-
-		new Setting(containerEl)
-			.setName('无头浏览器提取')
-			.setDesc('微信文章静态抓取失败时，使用 Electron BrowserWindow 渲染页面后再提取内容（仅桌面端有效）')
-			.addToggle(toggle => {
-				toggle
-					.setValue(Platform.isDesktop ? this.plugin.settings.headlessExtraction : false)
-					.setDisabled(!Platform.isDesktop)
-					.onChange(async value => {
-						this.plugin.settings.headlessExtraction = value;
+						this.plugin.settings.downloadEnhanced = value;
 						await this.plugin.saveSettings();
 					});
 			});
