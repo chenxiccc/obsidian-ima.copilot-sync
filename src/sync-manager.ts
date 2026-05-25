@@ -58,8 +58,6 @@ export class SyncManager {
 	private imageHandler: ImageHandler;
 	private fileDownloader: FileDownloader;
 	private isSyncing = false;
-	/** 本次同步中写入占位内容的条目，用于生成 Sync Issues.md / Items with placeholder content this sync */
-	private pendingIssues: { title: string; url: string; site: string }[] = [];
 	private headlessExtractor: HeadlessExtractor;
 
 	constructor(
@@ -563,8 +561,6 @@ export class SyncManager {
 		parts.push(`> `);
 		parts.push(`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`);
 
-		this.trackPlaceholderIssue(item.title || item.media_id, url);
-
 		return escapeInlineHash(parts.join('\n'));
 	}
 
@@ -603,76 +599,6 @@ export class SyncManager {
 			``,
 			`**原文链接**: [${url}](${url})`,
 		].join('\n');
-	}
-
-	/** 记录一条占位条目，用于后续生成 Sync Issues.md / Record a placeholder item for Sync Issues.md */
-	private trackPlaceholderIssue(title: string, url: string): void {
-		// 按 URL 去重 / Deduplicate by URL
-		if (this.pendingIssues.some(i => i.url === url)) return;
-		const site = url.includes('weixin.qq.com') || url.includes('mp.weixin.qq.com') ? 'wechat'
-			: url.includes('zhihu.com') ? 'zhihu' : 'other';
-		this.pendingIssues.push({ title, url, site });
-	}
-
-	/** 生成 Sync Issues.md / Generate Sync Issues.md */
-	private async generateSyncIssues(): Promise<void> {
-		if (this.pendingIssues.length === 0) return;
-
-		// 按站点分组 / Group by site
-		const wechatItems = this.pendingIssues.filter(i => i.site === 'wechat');
-		const zhihuItems = this.pendingIssues.filter(i => i.site === 'zhihu');
-		const otherItems = this.pendingIssues.filter(i => i.site === 'other');
-
-		const lines: string[] = [
-			'# 同步问题汇总',
-			'',
-			`> 更新: ${new Date().toLocaleString()} | 共 ${this.pendingIssues.length} 篇内容无法自动获取`,
-			'',
-		];
-
-		const renderGroup = (label: string, items: typeof wechatItems) => {
-			if (items.length === 0) return;
-			lines.push(`## ${label} (${items.length} 篇)`);
-			lines.push('');
-			for (const item of items) {
-				// 尝试从 vault 找到对应文件生成 wikilink / Try to find file for wikilink
-				const mdFiles = this.vault.getFiles().filter(f => f.extension === 'md');
-				const found = mdFiles.find(f => {
-					const cache = this.app.metadataCache.getFileCache(f);
-					return (cache?.frontmatter as Record<string, unknown> | undefined)?.['source'] === item.url;
-				});
-				const link = found ? `[[${found.basename}]]` : item.title;
-				lines.push(`- ${link}`);
-			}
-			lines.push('');
-		};
-
-		renderGroup('微信公众号', wechatItems);
-		renderGroup('知乎', zhihuItems);
-		renderGroup('其他网站', otherItems);
-
-		lines.push('---');
-		lines.push('');
-		lines.push('### 如何处理');
-		lines.push('');
-		lines.push('**方法一（推荐）**：使用 Obsidian 内置浏览器');
-		lines.push('1. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**');
-		lines.push('2. 点击上方笔记链接，在 Obsidian 内打开网页');
-		lines.push('3. 点击右上角菜单 → **「保存到仓库」**');
-		lines.push('');
-		lines.push('**方法二**：使用浏览器扩展');
-		lines.push('- 在浏览器中安装 [Obsidian Web Clipper](https://obsidian.md/clipper)，打开原文后一键保存');
-		lines.push('');
-		lines.push('> 手动处理完所有条目后，可以删除此文件');
-		lines.push('');
-
-		const filePath = 'Sync Issues.md';
-		const existing = this.vault.getFileByPath(filePath);
-		if (existing instanceof TFile) {
-			await this.vault.modify(existing, lines.join('\n'));
-		} else {
-			await this.vault.create(filePath, lines.join('\n'));
-		}
 	}
 
 	/**
@@ -959,8 +885,7 @@ export class SyncManager {
 					}
 				}
 				if (!headlessSucceeded) {
-					this.trackPlaceholderIssue(title, url);
-					parts.push(
+						parts.push(
 						`> [!warning] 由于目标网站限制，无法获取完整内容`,
 						`> `,
 						`> **建议操作**：`,
@@ -1002,7 +927,6 @@ export class SyncManager {
 					}
 				}
 
-				this.trackPlaceholderIssue(title, url);
 				return this.buildFriendlyPlaceholder(title, url, mediaId);
 			}
 	}
