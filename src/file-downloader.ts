@@ -153,65 +153,59 @@ export class FileDownloader {
 		console.debug(`ima.copilot Sync: 文件已保存 / File saved: ${destPath}`);
 	}
 
+	/**
+	 * 通过 Node.js https.get 获取数据 Buffer（桌面端兜底共享实现）
+	 * Fetch data Buffer via Node.js https.get (shared desktop fallback implementation)
+	 */
+	private nodeHttpsGetBuffer(url: string, headers: Record<string, string>): Promise<Buffer> {
+		let https: typeof import('https');
+		try {
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
+			https = require('https') as typeof import('https');
+		} catch {
+			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
+		}
+
+		return new Promise<Buffer>((resolve, reject) => {
+			const req = https.get(url, { headers }, (res) => {
+				if (!res.statusCode || res.statusCode >= 400) {
+					reject(new Error(`HTTP ${res.statusCode}`));
+					return;
+				}
+				if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+					this.nodeHttpsGetBuffer(res.headers.location, headers)
+						.then(resolve)
+						.catch(reject);
+					return;
+				}
+				const chunks: Buffer[] = [];
+				res.on('data', (chunk: Buffer) => chunks.push(chunk));
+				res.on('end', () => {
+					const buffer = Buffer.concat(chunks);
+					if (buffer.length < 1024) {
+						console.warn(`ima.copilot Sync: Node.js 仅获取 ${buffer.length} 字节，可能是防盗链错误页 / Node.js only got ${buffer.length} bytes, may be anti-hotlink error page`);
+					}
+					resolve(buffer);
+				});
+				res.on('error', reject);
+			});
+			req.on('error', reject);
+			req.setTimeout(60_000, () => {
+				req.destroy();
+				reject(new Error('下载超时 / Download timeout'));
+			});
+		});
+	}
+
 	/** 通过 Node.js https.get 下载（桌面端兜底）/ Download via Node.js https.get (desktop fallback) */
 	public async downloadViaNodeHttps(
 		url: string,
 		destPath: string,
 		headers: Record<string, string>,
 	): Promise<void> {
-		// 动态引入 Node.js 模块，移动端不可用时直接抛错
-		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
-		let https: typeof import('https');
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef -- Node.js https 模块仅桌面端 Electron 兜底使用，移动端无此模块
-			https = require('https') as typeof import('https');
-		} catch {
-			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
-		}
-
-		return new Promise<void>((resolve, reject) => {
-			const req = https.get(url, { headers }, (res) => {
-				if (!res.statusCode || res.statusCode >= 400) {
-					reject(new Error(`HTTP ${res.statusCode}`));
-					return;
-				}
-
-				// 处理重定向 / Handle redirects
-				if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-					this.downloadViaNodeHttps(res.headers.location, destPath, headers)
-						.then(resolve)
-						.catch(reject);
-					return;
-				}
-
-				// eslint-disable-next-line no-undef -- Buffer 来自 Node.js 环境，桌面端 Electron 可用
-				const chunks: Buffer[] = [];
-				// eslint-disable-next-line no-undef -- Buffer 来自 Node.js 环境，桌面端 Electron 可用
-				res.on('data', (chunk: Buffer) => chunks.push(chunk));
-				res.on('end', () => { void (async () => {
-					try {
-						// eslint-disable-next-line no-undef -- Buffer 来自 Node.js 环境
-					const buffer = Buffer.concat(chunks);
-						if (buffer.length < 1024) {
-							console.warn(`ima.copilot Sync: Node.js 下载仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js download only ${buffer.length} bytes, may be anti-hotlink error page`);
-						}
-
-						await this.vault.adapter.writeBinary(destPath, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
-						console.debug(`ima.copilot Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
-						resolve();
-					} catch (err) {
-						reject(err instanceof Error ? err : new Error(String(err)));
-					}
-				})(); });
-				res.on('error', reject);
-			});
-			req.on('error', reject);
-			// 超时 60 秒 / 60 second timeout
-			req.setTimeout(60_000, () => {
-				req.destroy();
-				reject(new Error('下载超时 / Download timeout'));
-			});
-		});
+		const buffer = await this.nodeHttpsGetBuffer(url, headers);
+		await this.vault.adapter.writeBinary(destPath, (buffer.buffer as ArrayBuffer).slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+		console.debug(`ima.copilot Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
 	}
 
 	/**
@@ -225,58 +219,8 @@ export class FileDownloader {
 		url: string,
 		headers: Record<string, string>,
 	): Promise<string> {
-		// 动态引入 Node.js 模块，移动端不可用时直接抛错
-		// Dynamic import of Node.js modules; throws on mobile where they're unavailable
-		let https: typeof import('https');
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
-			https = require('https') as typeof import('https');
-		} catch {
-			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
-		}
-
-		return new Promise<string>((resolve, reject) => {
-			const req = https.get(url, { headers }, (res) => {
-				if (!res.statusCode || res.statusCode >= 400) {
-					reject(new Error(`HTTP ${res.statusCode}`));
-					return;
-				}
-
-				// 处理重定向 / Handle redirects
-				if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-					this.fetchHtmlViaNodeHttps(res.headers.location, headers)
-						.then(resolve)
-						.catch(reject);
-					return;
-				}
-
-				// 收集响应数据并拼接为 UTF-8 字符串
-				// Collect response data and concatenate as UTF-8 string
-				const chunks: Buffer[] = [];
-				// eslint-disable-next-line no-undef -- Buffer from Node.js env
-				res.on('data', (chunk: Buffer) => chunks.push(chunk));
-				res.on('end', () => {
-					try {
-						// eslint-disable-next-line no-undef -- Buffer from Node.js env
-						const buffer = Buffer.concat(chunks);
-						if (buffer.length < 1024) {
-							console.warn(`ima.copilot Sync: Node.js 获取 HTML 仅 ${buffer.length} 字节，可能是防盗链错误页 / Node.js HTML fetch only ${buffer.length} bytes, may be anti-hotlink error page`);
-						}
-						const html = buffer.toString('utf-8');
-						resolve(html);
-					} catch (err) {
-						reject(err instanceof Error ? err : new Error(String(err)));
-					}
-				});
-				res.on('error', reject);
-			});
-			req.on('error', reject);
-			// 超时 60 秒 / 60 second timeout
-			req.setTimeout(60_000, () => {
-				req.destroy();
-				reject(new Error('获取 HTML 超时 / HTML fetch timeout'));
-			});
-		});
+		const buffer = await this.nodeHttpsGetBuffer(url, headers);
+		return buffer.toString('utf-8');
 	}
 
 	/** 格式化图片链接 / Format image link */
