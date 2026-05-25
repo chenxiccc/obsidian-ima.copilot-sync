@@ -828,8 +828,10 @@ export class SyncManager {
 			// 静态 HTML 很大（>500KB JS）但提取内容很短（<2000 chars）→ JS 渲染页面，headless 可能有更多内容
 			// Large static HTML (>500KB JS) but short extracted content (<2000 chars) → JS-rendered page, headless may yield more
 			const looksLikeJsPage = html.length > 500_000 && (result.content?.trim().length || 0) < 2000;
-			const isXhsUrl = isXiaohongshuUrl(url);
-			if (wechatConverter && !isXhsUrl && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
+			// Headless 仅对微信页面有意义（其他平台要么是 SSR 要么有自己的提取策略）
+		// Headless is only meaningful for WeChat pages (other platforms are SSR or have their own strategy)
+		const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
+		if (wechatConverter && isWeChatPage && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
 				if (this.settings.downloadEnhanced) {
 					const headless = await this.tryHeadlessExtraction(url, wechatConverter);
