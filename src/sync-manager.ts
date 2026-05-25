@@ -8,6 +8,7 @@ import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown } from './html-to-md
 import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
 import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
+import { HeadlessExtractor } from './headless-extractor';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ export class SyncManager {
 	private isSyncing = false;
 	/** 本次同步中写入占位内容的条目，用于生成 Sync Issues.md / Items with placeholder content this sync */
 	private pendingIssues: { title: string; url: string; site: string }[] = [];
+	private headlessExtractor: HeadlessExtractor;
 
 	constructor(
 		private readonly app: App,
@@ -70,6 +72,7 @@ export class SyncManager {
 	) {
 		this.fileDownloader = new FileDownloader(vault);
 		this.imageHandler = new ImageHandler(vault, this.fileDownloader);
+		this.headlessExtractor = new HeadlessExtractor();
 	}
 
 	rebuildClient(): void {
@@ -580,7 +583,6 @@ export class SyncManager {
 		return '';
 	}
 
-
 	/** 生成友好的占位提示（统一文案）/ Build friendly placeholder text (unified copy) */
 	private buildFriendlyPlaceholder(title: string, url: string, mediaId: string): string {
 		return [
@@ -910,21 +912,56 @@ export class SyncManager {
 			if (effectiveTitle) {
 				parts.push(`# ${effectiveTitle}\n`);
 			}
-			// 方案 B：微信 URL 非 Tier 1 提取 → 标记降级、追踪到 Sync Issues
-			// Strategy B: WeChat URL not Tier 1 extraction → mark degraded, track for Sync Issues
-			if (wechatConverter && (result.fromMeta || !html.includes('id="js_content"'))) {
-				this.trackPlaceholderIssue(title, url);
-				parts.push(
-					`> [!warning] 由于目标网站限制，无法获取完整内容`,
-					`> `,
-					`> **建议操作**：`,
-					`> 1. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
-					`> 2. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
-					`> 3. 点击右上角菜单 → **「保存到仓库」**`,
-					`> `,
-					`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`,
-					`\n`,
-				);
+			// 微信 URL 未获取到完整内容 → 尝试 Tier 4 headless BrowserWindow 回退
+			// WeChat URL didn't get full content → try Tier 4 headless BrowserWindow fallback
+			const contentTooShort = result.content && result.content.trim().length < 120;
+			// HTML 含 <img> 但提取结果中无 Markdown 图片 → 图片丢失，需 headless
+			// HTML has <img> tags but extracted Markdown has no images → images lost, need headless
+			const hasOrphanImages = /<img[^>]+src=["'"]https?:\/\/[^'"]+mmbiz[^'"]*['"]/i.test(html) && !/!\[.*\]\(https?:\/\/[^)]+mmbiz[^)]+\)/.test(result.content || '');
+			if (wechatConverter && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages)) {
+				let headlessSucceeded = false;
+				if (this.settings.headlessExtraction) {
+					console.debug(`ima.copilot Sync: Headless trigger fromMeta=${result.fromMeta} contentLen=${result.content?.length||0}`);
+					const renderedHtml = await this.headlessExtractor.extractRenderedHtml(url);
+					if (renderedHtml && HeadlessExtractor.hasWeChatContent(renderedHtml)) {
+						const headlessResult = wechatConverter(renderedHtml, url);
+						if (headlessResult.content && !headlessResult.fromMeta) {
+							// headless 提取成功，用新结果替换 / Headless succeeded, replace with new result
+							html = renderedHtml;
+							result.content = headlessResult.content;
+							result.title = headlessResult.title || result.title;
+							result.author = headlessResult.author || result.author;
+							result.fromMeta = false;
+							// 用 headless 结果更新 frontmatter（含作者和发布时间）/ Update frontmatter with headless result
+							parts.length = 0;
+							parts.push(this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl));
+							const hdTitle = result.title || title;
+							if (hdTitle) {
+								parts.push(`# ${hdTitle}\n`);
+							}
+							headlessSucceeded = true;
+							console.debug(`ima.copilot Sync: Headless BrowserWindow succeeded for "${title}"`);
+						} else {
+							console.debug(`ima.copilot Sync: Headless content still degraded for "${title}" fromMeta=${headlessResult.fromMeta}`);
+						}
+					} else {
+						console.debug(`ima.copilot Sync: Headless no usable content for "${title}"`);
+					}
+				}
+				if (!headlessSucceeded) {
+					this.trackPlaceholderIssue(title, url);
+					parts.push(
+						`> [!warning] 由于目标网站限制，无法获取完整内容`,
+						`> `,
+						`> **建议操作**：`,
+						`> 1. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
+						`> 2. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
+						`> 3. 点击右上角菜单 → **「保存到仓库」**`,
+						`> `,
+						`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`,
+						`\n`,
+					);
+				}
 			}
 			if (result.content) {
 				parts.push(result.content);
@@ -934,6 +971,30 @@ export class SyncManager {
 			return escapeInlineHash(parts.join('\n'));
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
+				console.warn(`ima.copilot Sync: All static extraction failed for "${title}": ${msg}`);
+
+				// 尝试 headless 作为最后手段 / Attempt headless as last resort
+				if (this.settings.headlessExtraction) {
+					try {
+						const renderedHtml = await this.headlessExtractor.extractRenderedHtml(url);
+						if (renderedHtml && HeadlessExtractor.hasWeChatContent(renderedHtml)) {
+							const headlessResult = convertWeChatHtmlToMarkdown(renderedHtml, url);
+							if (headlessResult.content && !headlessResult.fromMeta) {
+								const frontmatter = this.buildWebFrontmatter(url, headlessResult.author, headlessResult.published, mediaId, headlessResult.authorUrl);
+								const parts: string[] = [frontmatter];
+								const effectiveTitle = headlessResult.title || title;
+								if (effectiveTitle) {
+									parts.push(`# ${effectiveTitle}\n`);
+								}
+								parts.push(headlessResult.content);
+								return escapeInlineHash(parts.join('\n'));
+							}
+						}
+					} catch (headlessErr) {
+						console.warn(`ima.copilot Sync: Headless extraction also failed for "${title}":`, headlessErr);
+					}
+				}
+
 				this.trackPlaceholderIssue(title, url);
 				return this.buildFriendlyPlaceholder(title, url, mediaId);
 			}
@@ -1036,7 +1097,6 @@ export class SyncManager {
 			return `> ${typeLabel}下载失败：${msg}\n\n**标题**: ${title}`;
 		}
 	}
-
 
 	/**
 	 * 处理 IMA 笔记中 <file> 标签格式的文件附件：调 get_media_info 获取下载 URL，

@@ -75,6 +75,8 @@ export interface ImaPluginSettings {
 	forceReadingMode: boolean;
 	/** 防盗链下载增强（Node.js https 回退，仅桌面端）/ Anti-hotlink download enhancement (Node.js https fallback, desktop only) */
 	antiHotlinkEnhanced: boolean;
+	/** 无头浏览器提取（仅桌面端）/ Headless browser extraction (desktop only) */
+	headlessExtraction: boolean;
 }
 
 export const DEFAULT_SETTINGS: ImaPluginSettings = {
@@ -96,6 +98,7 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	publicKnowledgeBases: [],
 	forceReadingMode: true,
 	antiHotlinkEnhanced: true,
+	headlessExtraction: true,
 };
 
 // ─── 确认对话框（取消/删除知识库时询问是否清理本地文件）/ Confirm modal for KB removal ──
@@ -693,6 +696,21 @@ export class ImaSettingTab extends PluginSettingTab {
 					.setDisabled(!Platform.isDesktop)
 					.onChange(async value => {
 						this.plugin.settings.antiHotlinkEnhanced = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// ── 无头浏览器提取 / Headless browser extraction ─────────────────────
+
+		new Setting(containerEl)
+			.setName('无头浏览器提取')
+			.setDesc('微信文章静态抓取失败时，使用 Electron BrowserWindow 渲染页面后再提取内容（仅桌面端有效）')
+			.addToggle(toggle => {
+				toggle
+					.setValue(Platform.isDesktop ? this.plugin.settings.headlessExtraction : false)
+					.setDisabled(!Platform.isDesktop)
+					.onChange(async value => {
+						this.plugin.settings.headlessExtraction = value;
 						await this.plugin.saveSettings();
 					});
 			});
