@@ -1,6 +1,40 @@
 import { Vault, normalizePath, requestUrl } from 'obsidian';
-import type { AttachmentOptions } from './image-handler';
-import type { LinkFormat } from './settings';
+
+// ─── 共享类型定义 / Shared type definitions ────────────────────────────────
+
+/** 链接格式 / Link format */
+export type LinkFormat = 'auto' | 'wikilink' | 'markdown';
+
+/** 附件存储路径配置 / Attachment storage path config */
+export interface AttachmentPathConfig {
+	syncFolder: string;
+	kbName?: string;
+	kbCategory?: string;
+}
+
+/** 下载开关与限制 / Download toggles and limits */
+export interface DownloadConfig {
+	downloadImages: boolean;
+	downloadFiles: boolean;
+	imageSizeLimitBytes: number;
+	fileSizeLimitBytes: number;
+	antiHotlinkEnhanced: boolean;
+}
+
+/** 附件选项（组合类型）/ Attachment options (composite) */
+export interface AttachmentOptions extends AttachmentPathConfig, DownloadConfig {
+	linkFormat: LinkFormat;
+}
+
+/** 图片命名上下文 / Image naming context */
+export interface ImageNamingContext {
+	titleBase?: string;
+}
+
+/** 创建默认图片命名上下文 / Create default image naming context */
+export function createNamingContext(titleBase?: string): ImageNamingContext {
+	return { titleBase };
+}
 
 // ─── 文件名清理 / Filename sanitization ──────────────────────────────────────
 

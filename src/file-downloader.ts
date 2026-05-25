@@ -1,5 +1,5 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
-import type { AttachmentOptions } from './image-handler';
+import type { AttachmentOptions } from './path-utils';
 import {
 	CHROME_UA,
 	escapePathForMarkdown,

@@ -1,6 +1,6 @@
 import { App, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
 import type { ImaPluginSettings } from './settings';
-import type { AttachmentOptions } from './image-handler';
+import type { AttachmentOptions } from './path-utils';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
 import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima-client';
 import { ImageHandler } from './image-handler';

@@ -1,7 +1,8 @@
 import { Vault, normalizePath } from 'obsidian';
-import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
+import type { AttachmentOptions, ImageNamingContext, LinkFormat } from './path-utils';
 import {
+	createNamingContext,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	buildStableFilename,
@@ -21,43 +22,6 @@ import {
 const IMG_URL_REGEX = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
 // 匹配 Markdown 普通链接语法：[text](https://...) / Match Markdown plain link syntax
 const FILE_URL_REGEX = /\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
-
-// ─── 图片命名上下文 / Image naming context ───────────────────────────────────
-
-/** 图片命名上下文，避免逐层传递多个参数 / Image naming context to avoid parameter sprawl */
-export interface ImageNamingContext {
-	/** 笔记标题（用于文件名前缀）/ Note title (for filename prefix) */
-	titleBase?: string;
-
-}
-
-/** 创建默认图片命名上下文 / Create default image naming context */
-export function createNamingContext(titleBase?: string): ImageNamingContext {
-	return { titleBase };
-}
-
-// ─── 附件处理选项 / Attachment processing options ────────────────────────────
-
-export interface AttachmentOptions {
-	/** 图片链接格式 / Image link format */
-	linkFormat: LinkFormat;
-	/** 同步根目录（用于 subfolder/samename 模式）/ Sync root dir (for subfolder/samename modes) */
-	syncFolder: string;
-	/** 是否下载图片 / Whether to download images */
-	downloadImages: boolean;
-	/** 图片大小上限字节数（0 = 不限制）/ Image size limit in bytes (0 = no limit) */
-	imageSizeLimitBytes: number;
-	/** 是否下载文件 / Whether to download files */
-	downloadFiles: boolean;
-	/** 文件大小上限字节数（0 = 不限制）/ File size limit in bytes (0 = no limit) */
-	fileSizeLimitBytes: number;
-	/** 知识库名称（用于附件子目录）/ KB name (for attachment subdirectory) */
-	kbName?: string;
-	/** 知识库分类（个人知识库/共享知识库/订阅和公共知识库）/ KB category */
-	kbCategory?: string;
-	/** 防盗链图片下载增强（Node.js https 回退，仅桌面端）/ Anti-hotlink enhanced (Node.js https fallback, desktop only) */
-	antiHotlinkEnhanced: boolean;
-}
 
 // ─── 图片处理器 / Image handler ──────────────────────────────────────────────
 
