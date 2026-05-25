@@ -1,5 +1,4 @@
-import { App, Modal, normalizePath, Platform, PluginSettingTab, Setting, Notice } from 'obsidian';
-import type ImaPlugin from './main';
+import { App, Modal, normalizePath, Platform, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { ImaClient, ImaPublicClient, formatImaError } from './ima-client';
 import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
 import { sanitizeFilename } from './path-utils';
@@ -157,11 +156,20 @@ class ConfirmModal extends Modal {
 
 // ─── 设置界面 / Settings UI ─────────────────────────────────────────────────
 
-export class ImaSettingTab extends PluginSettingTab {
-	plugin: ImaPlugin;
+/** 设置页需要的插件接口，避免循环依赖 main.ts / Plugin interface for settings tab */
+interface SettingsHost {
+	settings: ImaPluginSettings;
+	saveSettings(): Promise<void>;
+	deleteKbFolder(...paths: string[]): Promise<void>;
+	migrateSyncFolder(oldFolder: string, newFolder: string): Promise<void>;
+	triggerSync(): void;
+}
 
-	constructor(app: App, plugin: ImaPlugin) {
-		super(app, plugin);
+export class ImaSettingTab extends PluginSettingTab {
+	plugin: SettingsHost;
+
+	constructor(app: App, plugin: SettingsHost) {
+		super(app, plugin as unknown as Plugin);
 		this.plugin = plugin;
 	}
 
