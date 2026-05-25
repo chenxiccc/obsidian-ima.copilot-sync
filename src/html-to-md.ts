@@ -256,8 +256,19 @@ function extractWeChatImages(html: string, doc: Document, existingContent: strin
 		if (mdMatch[1]) seen.add(mdMatch[1]);
 	}
 
-	// 全 DOM 搜索 img 标签 / Search all img tags in DOM
-	for (const img of Array.from(doc.querySelectorAll('img'))) {
+	// 在已知内容容器内搜索 img 标签（避免抓取页面底部推荐缩略图）
+	// Search img tags within known content containers (avoid bottom recommendation thumbnails)
+	const contentImgs: HTMLImageElement[] = [];
+	const containers = [
+		doc.getElementById('js_content'),
+		doc.querySelector('.share_content_page'),
+		doc.querySelector('.rich_media_content'),
+		doc.getElementById('js_article'),
+	].filter(Boolean);
+	for (const c of containers) {
+		contentImgs.push(...Array.from(c!.querySelectorAll('img')));
+	}
+	for (const img of contentImgs) {
 		const imgUrl = img.getAttribute('data-src') || img.src;
 		if (!imgUrl || !/^https?:\/\//.test(imgUrl)) continue;
 		// 过滤系统资源 / Filter system resources
@@ -268,15 +279,31 @@ function extractWeChatImages(html: string, doc: Document, existingContent: strin
 		parts.push(`![${(img as HTMLImageElement).alt || ''}](${imgUrl})`);
 	}
 
-	// data-src 模式补充（可能在非 img 标签内）/ data-src supplement (may be in non-img tags)
-	const dataSrcRegex = /data-src="(https?:\/\/[^"]+?(?:mmbiz|qpic)[^"]+?)"/gi;
-	let dsMatch;
-	while ((dsMatch = dataSrcRegex.exec(html)) !== null) {
-		const imgUrl = dsMatch[1] as string;
-		if (!seen.has(imgUrl)) {
+	// picture_page_info_list 中的正文图片（限制搜索范围 5000 字符，排除页面底部推荐）
+	// Content images from picture_page_info_list (limit search range to 5000 chars, exclude bottom recommendations)
+	const picListPos = html.search(/picture_page_info_list/);
+	if (picListPos >= 0) {
+		const picBlock = html.substring(picListPos, picListPos + 5000);
+		const cdnRegex = /cdn_url\s*:\s*['"](https?:\/\/[^'"]+?(?:mmbiz|qpic)[^'"]*?(?:jpe?g|png|gif|webp)[^'"]*?)['"]/gi;
+		let cdnMatch;
+		while ((cdnMatch = cdnRegex.exec(picBlock)) !== null) {
+			const imgUrl = cdnMatch[1] as string;
+			if (seen.has(imgUrl)) continue;
 			seen.add(imgUrl);
 			parts.push(`![](${imgUrl})`);
 		}
+	}
+
+	// data-src 模式 / data-src pattern
+	const dataSrcRegex = /data-src="(https?:\/\/[^"]+?(?:mmbiz|qpic)[^"]*?(?:jpe?g|png|gif|webp)[^"]*?)"/gi;
+	let dsMatch;
+	while ((dsMatch = dataSrcRegex.exec(html)) !== null) {
+		const imgUrl = dsMatch[1] as string;
+		if (imgUrl.includes('pic_blank.gif')) continue;
+		if (imgUrl.includes('res.wx.qq.com/mmbizappmsg')) continue;
+		if (seen.has(imgUrl)) continue;
+		seen.add(imgUrl);
+		parts.push(`![](${imgUrl})`);
 	}
 
 	return parts.length > 0 ? parts.join('\n') + '\n' : '';

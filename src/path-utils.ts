@@ -9,8 +9,7 @@ export function sanitizeFilename(name: string): string {
 	return name
 		.replace(/[/\\:*?"<>|#^[\]]/g, '_')
 		.replace(/\s+/g, ' ')
-		.trim()
-		.slice(0, 100);
+		.trim();
 }
 
 /** 清理标题为安全文件名片段（空格→连字符，特殊字符→下划线）/ Sanitize title for filename segment (spaces→hyphens, special chars→underscores) */
@@ -167,7 +166,11 @@ export function buildStableFilename(
 		const urlObj = new URL(url);
 		const segments = urlObj.pathname.split('/').filter(s => s.length > 0);
 		const lastSegment = segments[segments.length - 1];
-		if (lastSegment) {
+		// 末尾段是纯数字（如 mmbiz 图片 URL 的 /0），用 URL 短 hash 做唯一标识
+		// Last segment is numeric (e.g. /0 in mmbiz image URLs), use short URL hash as unique identifier
+		if (lastSegment && /^\d+$/.test(lastSegment)) {
+			filename = shortHash(url);
+		} else if (lastSegment) {
 			filename = decodeURIComponent(lastSegment);
 			const dotIdx = filename.lastIndexOf('.');
 			if (dotIdx > 0) {
@@ -185,6 +188,19 @@ export function buildStableFilename(
 		? (filename.includes('.') ? filename : `${filename}${ext}`)
 		: `${options.fallbackName}${ext}`;
 	return sanitizeFilename(`${safeTitle}-${sanitizeFilename(baseFilename)}`);
+}
+
+/**
+ * 生成 URL 的短哈希（8 位十六进制），用于 mmbiz 等 /0 结尾 URL 的唯一文件名
+ * Generate short URL hash (8 hex chars) for unique filenames from /0-ending URLs like mmbiz
+ */
+function shortHash(url: string): string {
+	let hash = 0;
+	for (let i = 0; i < url.length; i++) {
+		hash = ((hash << 5) - hash + url.charCodeAt(i)) | 0;
+	}
+	// 转为 8 位十六进制 + 保留原始低 8 位确保唯一性 / Convert to 8 hex chars with low bits for uniqueness
+	return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 /** Markdown 链接路径含空格时用 <> 包裹 / Wrap Markdown link path with <> when it contains spaces */
