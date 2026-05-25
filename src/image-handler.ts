@@ -1,4 +1,4 @@
-import { requestUrl, Vault, normalizePath } from 'obsidian';
+import { Vault, normalizePath } from 'obsidian';
 import type { LinkFormat } from './settings';
 import type { FileDownloader } from './file-downloader';
 import {

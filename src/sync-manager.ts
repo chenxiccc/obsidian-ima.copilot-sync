@@ -83,6 +83,7 @@ export class SyncManager {
 			new Notice('ima.copilot sync: 同步正在进行中，请稍候');
 			return;
 		}
+		this.isSyncing = true;
 
 		// 凭证仅私有同步需要；公共知识库同步无需凭证
 		// Credentials only needed for private sync; public KB sync doesn't need them
@@ -94,22 +95,20 @@ export class SyncManager {
 
 		// 检查是否有任何同步任务可执行 / Check if any sync task is available
 		const hasPrivateWork = this.settings.syncNotes || this.settings.syncKnowledgeBase;
-		// 订阅知识库（encryptedKbId 非空且尚无 numericKbId）需要凭证做一次性 ID 转换
-		// Subscribed KB (has encryptedKbId but no numericKbId) needs credentials for one-time ID conversion
 		const hasSubscribedKBNeedingConversion = this.settings.publicKnowledgeBases.some(
 			kb => !!kb.encryptedKbId && !kb.numericKbId && !kb.shareId,
 		);
 		const hasPublicWork = this.settings.publicKnowledgeBases.length > 0;
 		if ((hasPrivateWork || hasSubscribedKBNeedingConversion) && !hasCredentials) {
 			new Notice('ima.copilot sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
+			this.isSyncing = false;
 			return;
 		}
 		if (!hasPrivateWork && !hasPublicWork) {
 			new Notice('ima.copilot sync: 没有可执行的同步任务');
+			this.isSyncing = false;
 			return;
 		}
-
-		this.isSyncing = true;
 		this.onSyncStateChange?.(true);
 		new Notice('ima.copilot sync: 开始同步…');
 
@@ -295,7 +294,11 @@ export class SyncManager {
 		// ── 修复残留外链图片 / Fix leftover external image links ──
 		await this.fixPendingImages(syncFolder, opts);
 
-		this.settings.lastSyncTime = Date.now();
+		// 仅私有同步未过期时更新时间戳，避免下次跳过需重试的条目
+		// Only update timestamp when private sync didn't expire, avoid skipping items that need retry
+		if (!authExpired) {
+			this.settings.lastSyncTime = Date.now();
+		}
 		await this.saveSettings();
 
 		return syncedCount;
