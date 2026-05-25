@@ -85,8 +85,7 @@ export class HeadlessExtractor {
 
 			const html = await this.waitForContentAndExtract(win);
 			return html;
-		} catch (err) {
-			const errMsg = err instanceof Error ? err.message : String(err);
+		} catch {
 			return null;
 		} finally {
 			this.destroyWindow(win);
@@ -121,14 +120,14 @@ export class HeadlessExtractor {
 
 			let finished = false;
 
-			win.webContents.on('did-finish-load', () => {
+			win.webContents.once('did-finish-load', () => {
 				if (finished) return;
 				finished = true;
 				clearTimeout(timer);
 				resolve();
 			});
 
-			win.webContents.on('did-fail-load', (_event: any, _errorCode: number, _errorDescription: string) => {
+			win.webContents.once('did-fail-load', (_event: any, _errorCode: number, _errorDescription: string) => {
 				if (finished) return;
 				finished = true;
 				clearTimeout(timer);

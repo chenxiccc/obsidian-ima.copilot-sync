@@ -852,6 +852,21 @@ export class SyncManager {
 	 * 抓取网页内容并转为 Markdown（含 YAML frontmatter）
 	 * Fetch webpage content and convert to Markdown (with YAML frontmatter)
 	 */
+	/**
+	 * 尝试 headless BrowserWindow 提取并转换 / Try headless BrowserWindow extraction and conversion
+	 * @returns 成功返回 { html, result }，失败返回 null
+	 */
+	private async tryHeadlessExtraction(
+		url: string,
+		converter: (html: string, url: string) => HtmlToMdResult,
+	): Promise<{ html: string; result: HtmlToMdResult } | null> {
+		const renderedHtml = await this.headlessExtractor.extractRenderedHtml(url);
+		if (!renderedHtml || !HeadlessExtractor.hasWeChatContent(renderedHtml)) return null;
+		const headlessResult = converter(renderedHtml, url);
+		if (!headlessResult.content || headlessResult.fromMeta) return null;
+		return { html: renderedHtml, result: headlessResult };
+	}
+
 	private async syncWebContent(
 		url: string,
 		headers: Record<string, string> | undefined,
@@ -927,31 +942,20 @@ export class SyncManager {
 			if (wechatConverter && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
 				if (this.settings.headlessExtraction) {
-					console.debug(`ima.copilot Sync: Headless trigger fromMeta=${result.fromMeta} contentLen=${result.content?.length||0}`);
-					const renderedHtml = await this.headlessExtractor.extractRenderedHtml(url);
-					if (renderedHtml && HeadlessExtractor.hasWeChatContent(renderedHtml)) {
-						const headlessResult = wechatConverter(renderedHtml, url);
-						if (headlessResult.content && !headlessResult.fromMeta) {
-							// headless 提取成功，用新结果替换 / Headless succeeded, replace with new result
-							html = renderedHtml;
-							result.content = headlessResult.content;
-							result.title = headlessResult.title || result.title;
-							result.author = headlessResult.author || result.author;
-							result.fromMeta = false;
-							// 用 headless 结果更新 frontmatter（含作者和发布时间）/ Update frontmatter with headless result
-							parts.length = 0;
-							parts.push(this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl));
-							const hdTitle = result.title || title;
-							if (hdTitle) {
-								parts.push(`# ${hdTitle}\n`);
-							}
-							headlessSucceeded = true;
-							console.debug(`ima.copilot Sync: Headless BrowserWindow succeeded for "${title}"`);
-						} else {
-							console.debug(`ima.copilot Sync: Headless content still degraded for "${title}" fromMeta=${headlessResult.fromMeta}`);
+					const headless = await this.tryHeadlessExtraction(url, wechatConverter);
+					if (headless) {
+						html = headless.html;
+						result.content = headless.result.content;
+						result.title = headless.result.title || result.title;
+						result.author = headless.result.author || result.author;
+						result.fromMeta = false;
+						parts.length = 0;
+						parts.push(this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl));
+						const hdTitle = result.title || title;
+						if (hdTitle) {
+							parts.push(`# ${hdTitle}\n`);
 						}
-					} else {
-						console.debug(`ima.copilot Sync: Headless no usable content for "${title}"`);
+						headlessSucceeded = true;
 					}
 				}
 				if (!headlessSucceeded) {
@@ -982,19 +986,16 @@ export class SyncManager {
 				// 尝试 headless 作为最后手段 / Attempt headless as last resort
 				if (this.settings.headlessExtraction) {
 					try {
-						const renderedHtml = await this.headlessExtractor.extractRenderedHtml(url);
-						if (renderedHtml && HeadlessExtractor.hasWeChatContent(renderedHtml)) {
-							const headlessResult = convertWeChatHtmlToMarkdown(renderedHtml, url);
-							if (headlessResult.content && !headlessResult.fromMeta) {
-								const frontmatter = this.buildWebFrontmatter(url, headlessResult.author, headlessResult.published, mediaId, headlessResult.authorUrl);
-								const parts: string[] = [frontmatter];
-								const effectiveTitle = headlessResult.title || title;
-								if (effectiveTitle) {
-									parts.push(`# ${effectiveTitle}\n`);
-								}
-								parts.push(headlessResult.content);
-								return escapeInlineHash(parts.join('\n'));
+						const headless = await this.tryHeadlessExtraction(url, convertWeChatHtmlToMarkdown);
+						if (headless) {
+							const frontmatter = this.buildWebFrontmatter(url, headless.result.author, headless.result.published, mediaId, headless.result.authorUrl);
+							const hdParts: string[] = [frontmatter];
+							const hdTitle = headless.result.title || title;
+							if (hdTitle) {
+								hdParts.push(`# ${hdTitle}\n`);
 							}
+							hdParts.push(headless.result.content);
+							return escapeInlineHash(hdParts.join('\n'));
 						}
 					} catch (headlessErr) {
 						console.warn(`ima.copilot Sync: Headless extraction also failed for "${title}":`, headlessErr);

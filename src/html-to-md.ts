@@ -235,7 +235,7 @@ function detectWeChatContentSelector(doc: Document): string | null {
 function isWeChatBlockPage(doc: Document): boolean {
 	return !!doc.querySelector('.weui-msg')
 		|| (doc.body?.textContent || '').includes('环境异常')
-		|| /TCaptcha/i.test(doc.body?.innerHTML || '');
+		|| /captcha/i.test(doc.body?.textContent || '');
 }
 
 /**
@@ -295,7 +295,7 @@ function extractWeChatImages(html: string, doc: Document, existingContent: strin
 	// cdn_url 中含 from=appmsg 的正文图片（轮播中隐藏的图不在 DOM 里）
 	// Content images from cdn_url with from=appmsg (hidden swiper images not in DOM)
 	const cdnRegex = /cdn_url\s*:\s*['"](https?:\/\/[^'"]*?from=appmsg[^'"]*?)['"]/gi;
-	let cdnMatch;
+	let cdnMatch: RegExpExecArray | null;
 	while ((cdnMatch = cdnRegex.exec(html)) !== null) {
 		const imgUrl = cdnMatch[1] as string;
 		const normalized = normalizeImgUrl(imgUrl);
@@ -307,7 +307,7 @@ function extractWeChatImages(html: string, doc: Document, existingContent: strin
 
 	// data-src 模式 / data-src pattern
 	const dataSrcRegex = /data-src="(https?:\/\/[^"]+?(?:mmbiz|qpic)[^"]*?(?:jpe?g|png|gif|webp)[^"]*?)"/gi;
-	let dsMatch;
+	let dsMatch: RegExpExecArray | null;
 	while ((dsMatch = dataSrcRegex.exec(html)) !== null) {
 		const imgUrl = dsMatch[1] as string;
 		if (imgUrl.includes('pic_blank.gif')) continue;
