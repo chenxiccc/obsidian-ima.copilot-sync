@@ -245,15 +245,34 @@ function isWeChatBlockPage(doc: Document): boolean {
  * 用于弥补 defuddle 对图片分享页等格式过滤图片的缺陷
  * Compensates for defuddle filtering images in formats like image share pages
  */
+/**
+ * 标准化 mmbiz 图片 URL 用于去重（去除查询参数，统一子域名）
+ * Normalize mmbiz image URL for dedup (strip query params, normalize subdomain)
+ */
+function normalizeImgUrl(url: string): string {
+	try {
+		const u = new URL(url);
+		// 去掉查询参数 / Strip query params
+		return u.origin + u.pathname;
+	} catch {
+		const idx = url.indexOf('?');
+		return idx >= 0 ? url.substring(0, idx) : url;
+	}
+}
+
 function extractWeChatImages(html: string, doc: Document, existingContent: string): string {
 	const seen = new Set<string>();
+	const seenNormalized = new Set<string>();
 	const parts: string[] = [];
 
 	// 先收集已有 Markdown 中的图片 URL 用于去重 / Collect existing Markdown image URLs for dedup
 	const mdImgRegex = /!\[.*\]\((https?:\/\/[^)]+)\)/g;
 	let mdMatch: RegExpExecArray | null;
 	while ((mdMatch = mdImgRegex.exec(existingContent)) !== null) {
-		if (mdMatch[1]) seen.add(mdMatch[1]);
+		if (mdMatch[1]) {
+			seen.add(mdMatch[1]);
+			seenNormalized.add(normalizeImgUrl(mdMatch[1]));
+		}
 	}
 
 	// 全 DOM 搜索 img 标签，并通过 from=appmsg 过滤推荐缩略图
@@ -266,8 +285,10 @@ function extractWeChatImages(html: string, doc: Document, existingContent: strin
 		if (imgUrl.includes('res.wx.qq.com/mmbizappmsg')) continue;
 		// 正文图片特征 / Content image indicator
 		if (!imgUrl.includes('from=appmsg')) continue;
-		if (seen.has(imgUrl)) continue;
+		const normalized = normalizeImgUrl(imgUrl);
+		if (seen.has(imgUrl) || seenNormalized.has(normalized)) continue;
 		seen.add(imgUrl);
+		seenNormalized.add(normalized);
 		parts.push(`![${(img as HTMLImageElement).alt || ''}](${imgUrl})`);
 	}
 
@@ -277,8 +298,10 @@ function extractWeChatImages(html: string, doc: Document, existingContent: strin
 	let cdnMatch;
 	while ((cdnMatch = cdnRegex.exec(html)) !== null) {
 		const imgUrl = cdnMatch[1] as string;
-		if (seen.has(imgUrl)) continue;
+		const normalized = normalizeImgUrl(imgUrl);
+		if (seen.has(imgUrl) || seenNormalized.has(normalized)) continue;
 		seen.add(imgUrl);
+		seenNormalized.add(normalized);
 		parts.push(`![](${imgUrl})`);
 	}
 
