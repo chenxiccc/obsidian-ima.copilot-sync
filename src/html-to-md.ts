@@ -387,3 +387,59 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 
 	return result;
 }
+
+// ─── 小红书文章提取 / Xiaohongshu article extraction ─────────────────────────
+
+/**
+ * 检测是否为小红书页面 / Check if it's a Xiaohongshu page
+ */
+export function isXiaohongshuUrl(url: string): boolean {
+	return /(?:xiaohongshu\.com|xhslink\.com)/.test(url);
+}
+
+/**
+ * 从小红书 __INITIAL_STATE__ JSON 提取图片 URL
+ * Extract image URLs from Xiaohongshu __INITIAL_STATE__ JSON
+ */
+function extractXiaohongshuImages(html: string): string[] {
+	const match = html.match(/window\.__INITIAL_STATE__\s*=\s*(.+?)<\/script>/);
+	if (!match?.[1]) return [];
+
+	try {
+		const json = JSON.parse(match[1].replace(/undefined/g, 'null'));
+		const noteId = Object.keys(json.note?.noteDetailMap || {})[0];
+		if (!noteId) return [];
+		const noteDetail = (json.note?.noteDetailMap as Record<string, unknown>)?.[noteId as string] as { note?: { imageList?: Array<{ urlDefault?: string }> } } | undefined;
+		const imageList = noteDetail?.note?.imageList || [];
+		return imageList
+			.map((img: { urlDefault?: string }) => img.urlDefault || '')
+			.filter(Boolean);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * 小红书文章 HTML → Markdown
+ * Xiaohongshu article HTML → Markdown
+ *
+ * 文本通过 defuddle + contentSelector 提取，图片从 __INITIAL_STATE__ JSON 提取
+ * Text extracted via defuddle + contentSelector, images from __INITIAL_STATE__ JSON
+ */
+export function convertXiaohongshuHtmlToMarkdown(html: string, url?: string): HtmlToMdResult {
+	const parser = new DOMParser();
+	const doc = parser.parseFromString(html, 'text/html');
+
+	// 文本提取 / Text extraction
+	const desc = doc.querySelector('#detail-desc');
+	const contentSelector = desc ? '#detail-desc' : '.note-content';
+	const result = convertHtmlToMarkdown(html, { url, contentSelector, doc });
+
+	// 图片补充 / Image supplement
+	const images = extractXiaohongshuImages(html);
+	if (images.length > 0 && result.content) {
+		result.content = result.content.trimEnd() + '\n' + images.map(u => `![](${u})`).join('\n') + '\n';
+	}
+
+	return result;
+}

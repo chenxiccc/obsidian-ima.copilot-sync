@@ -4,7 +4,7 @@ import type { AttachmentOptions } from './path-utils';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
 import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima-client';
 import { ImageHandler } from './image-handler';
-import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown } from './html-to-md';
+import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
 import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
 import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
@@ -716,8 +716,14 @@ export class SyncManager {
 		params: SyncMediaParams,
 	): Promise<string> {
 		if (FETCHABLE_MEDIA_TYPES.has(mediaType)) {
-			const conv = mediaType === MEDIA_TYPE_WECHAT ? convertWeChatHtmlToMarkdown : undefined;
-			return await this.syncWebContent(params.url, params.headers, params.title, params.mediaId, conv);
+			const isXhs = isXiaohongshuUrl(params.url);
+			const conv = mediaType === MEDIA_TYPE_WECHAT ? convertWeChatHtmlToMarkdown
+				: isXhs ? convertXiaohongshuHtmlToMarkdown
+				: undefined;
+			const result = await this.syncWebContent(params.url, params.headers, params.title, params.mediaId, conv);
+			if (isXhs) {
+			}
+			return result;
 		}
 
 		if (mediaType === MEDIA_TYPE_IMAGE) {
@@ -822,7 +828,8 @@ export class SyncManager {
 			// 静态 HTML 很大（>500KB JS）但提取内容很短（<2000 chars）→ JS 渲染页面，headless 可能有更多内容
 			// Large static HTML (>500KB JS) but short extracted content (<2000 chars) → JS-rendered page, headless may yield more
 			const looksLikeJsPage = html.length > 500_000 && (result.content?.trim().length || 0) < 2000;
-			if (wechatConverter && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
+			const isXhsUrl = isXiaohongshuUrl(url);
+			if (wechatConverter && !isXhsUrl && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
 				if (this.settings.downloadEnhanced) {
 					const headless = await this.tryHeadlessExtraction(url, wechatConverter);
