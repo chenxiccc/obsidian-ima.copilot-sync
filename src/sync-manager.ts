@@ -466,9 +466,6 @@ export class SyncManager {
 				const content = await this.syncWebContent(stripWeChatTrackingParams(url), undefined, item.title, item.media_id, convertWeChatHtmlToMarkdown);
 				// 三层回退均失败时，使用 IMA 的 introduction/abstract 兜底
 				// Fall back to IMA introduction/abstract when all three tiers fail
-				if (this.isWeChatContentGarbage(content)) {
-					return this.buildWeChatIntroContent(item);
-				}
 				return content;
 			}
 		}
@@ -583,36 +580,6 @@ export class SyncManager {
 		return '';
 	}
 
-	/**
-	 * 检测微信文章内容是否为无效的 UI 残渣（三层回退均失败时触发 IMA 兜底）
-	 * Detect if WeChat article content is garbage UI chrome (triggers IMA fallback)
-	 */
-	private isWeChatContentGarbage(content: string): boolean {
-		// 提取 body：跳过 frontmatter（---...---）和标题行（# xxx）
-		// Extract body: skip frontmatter and title line
-		const lines = content.split('\n');
-		let i = 0;
-
-		// 跳过 YAML frontmatter / Skip YAML frontmatter
-		if (lines[0]?.trim() === '---') {
-			const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === '---');
-			if (end >= 0) i = end + 1;
-		}
-
-		// 跳过空行和标题行 / Skip blank lines and title line
-		while (i < lines.length && lines[i]!.trim() === '') i++;
-		if (i < lines.length && /^#\s/.test(lines[i]!.trim())) i++;
-
-		const body = lines.slice(i).join('\n').trim();
-
-		if (body.length > 200) return false;
-
-		// 微信 UI 特征词 / WeChat UI signature patterns
-		const garbagePatterns = ['微信扫一扫', '使用小程序', '向上滑动看下一个'];
-		return garbagePatterns.some(p => body.includes(p));
-	}
-
-	// ── 占位提示 + Sync Issues 汇总 / Placeholder hints + Sync Issues summary ──
 
 	/** 生成友好的占位提示（统一文案）/ Build friendly placeholder text (unified copy) */
 	private buildFriendlyPlaceholder(title: string, url: string, mediaId: string): string {
@@ -945,13 +912,19 @@ export class SyncManager {
 			}
 			// 方案 B：微信 URL 非 Tier 1 提取 → 标记降级、追踪到 Sync Issues
 			// Strategy B: WeChat URL not Tier 1 extraction → mark degraded, track for Sync Issues
-			const isWeChatDegraded = wechatConverter && (result.fromMeta || !html.includes('id="js_content"'));
-			if (result.fromMeta) {
-				// 微信 meta 提取路径缺图片，添加提示 / Meta extraction path lacks images, add warning
-				parts.push(`> [!warning] 微信技术限制，本文图片未能自动提取。点击[原文链接](${url})查看完整图文。\n`);
-			}
-			if (isWeChatDegraded) {
+			if (wechatConverter && (result.fromMeta || !html.includes('id="js_content"'))) {
 				this.trackPlaceholderIssue(title, url);
+				parts.push(
+					`> [!warning] 由于目标网站限制，无法获取完整内容`,
+					`> `,
+					`> **建议操作**：`,
+					`> 1. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
+					`> 2. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
+					`> 3. 点击右上角菜单 → **「保存到仓库」**`,
+					`> `,
+					`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`,
+					`\n`,
+				);
 			}
 			if (result.content) {
 				parts.push(result.content);
