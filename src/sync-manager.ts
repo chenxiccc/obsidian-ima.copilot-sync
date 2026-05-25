@@ -200,12 +200,11 @@ export class SyncManager {
 				try {
 					// modify_time 为毫秒级，lastSyncTime 为毫秒级 / modify_time is ms, lastSyncTime is also ms
 					if (existingMap.has(note.docid) && note.modify_time <= this.settings.lastSyncTime) continue;
-					const filename = sanitizeFilename(note.title || note.docid);
-					const filePath = normalizePath(`${syncFolder}/${filename}.md`);
+					const filePath = this.resolveFilePath(syncFolder, note.title, note.docid);
 					const rawContent = await this.client.getNoteContentMarkdown(note.docid);
-					console.debug(`ima.copilot Sync: processing "${filename}", hasFileTag=${rawContent.includes("<file")}`);
+					console.debug(`ima.copilot Sync: processing "${note.title}", hasFileTag=${rawContent.includes("<file")}`);
 					const withFiles = await this.processInlineFileTags(rawContent, filePath, opts);
-					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, filename);
+					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, note.title);
 					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${escapeInlineHash(withImages)}`;
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
@@ -255,8 +254,7 @@ export class SyncManager {
 					for (const item of items) {
 						try {
 							if (existingMap.has(item.media_id)) continue;
-							const filename = sanitizeFilename(item.title || item.media_id);
-							const filePath = normalizePath(`${kbFolder}/${filename}.md`);
+						const filePath = this.resolveFilePath(kbFolder, item.title, item.media_id);
 							const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
 							if (content !== null) {
 								await this.writeNote(filePath, content, kbOpts);
@@ -390,26 +388,28 @@ export class SyncManager {
 			}
 		}
 
-		// 移除仍未就绪的条目，不创建文件，下次同步自动重试
-		// Remove items still not ready, skip creating files, will retry on next sync
+		// 解析未完成的条目只跳过创建，不参与删除同步（避免误删之前已同步的文件）
+		// Parse-incomplete items skip creation only, NOT delete sync (avoid deleting previously synced files)
 		const skippedItems = items.filter(i => i.parse_progress < 100);
 		if (skippedItems.length > 0) {
 			console.warn(
-				`ima.copilot Sync: ${skippedItems.length} 个条目解析仍未完成，跳过：`,
+				`ima.copilot Sync: ${skippedItems.length} 个条目解析仍未完成，跳过创建：`,
 				skippedItems.map(i => i.title),
 			);
-			for (let i = items.length - 1; i >= 0; i--) {
-			if (items[i]!.parse_progress < 100) {
-					items.splice(i, 1);
-				}
-			}
 		}
 
 		// 扫描已有文件 / Scan existing files
 		const existingMap = this.scanExistingKbFiles(kbFolder);
 
-		// 删除同步 / Delete sync
+		// 删除同步时包含未就绪条目，防止其被误删 / Include unready items in delete sync to prevent false deletion
 		const apiMediaIds = new Set(items.map(i => i.media_id));
+
+		// 从创建列表中移除未就绪条目 / Remove unready items from creation list
+		for (let i = items.length - 1; i >= 0; i--) {
+			if (items[i]!.parse_progress < 100) {
+				items.splice(i, 1);
+			}
+		}
 		for (const [mediaId, filePath] of existingMap) {
 			if (!apiMediaIds.has(mediaId)) {
 				try {
@@ -436,8 +436,7 @@ export class SyncManager {
 					continue;
 				}
 				await ensureFolder(this.vault, itemFolder);
-				const filename = sanitizeFilename(item.title || item.media_id);
-				const filePath = normalizePath(`${itemFolder}/${filename}.md`);
+				const filePath = this.resolveFilePath(itemFolder, item.title, item.media_id);
 
 				const content = await this.syncPublicKBItem(item, filePath, opts);
 				if (content !== null) {
@@ -1120,6 +1119,23 @@ export class SyncManager {
 	 * 写入或更新笔记文件，更新后清理孤儿图片
 	 * Write or update note file, then clean up orphan images
 	 */
+	/**
+	 * 解析唯一文件路径，避免同名标题笔记互相覆盖
+	 * Resolve unique file path to prevent same-title notes from overwriting each other
+	 */
+	private resolveFilePath(dir: string, title: string, uniqueId: string, ext = 'md'): string {
+		const base = sanitizeFilename(title || uniqueId);
+		let filePath = normalizePath(`${dir}/${base}.${ext}`);
+
+		// 文件已存在且 media_id 不同 → 追加短标识 / File exists with different media_id → append short id
+		const existing = this.vault.getAbstractFileByPath(filePath);
+		if (existing instanceof TFile) {
+			const shortId = uniqueId.replace(/\W+/g, '_').slice(-12);
+			filePath = normalizePath(`${dir}/${base}-${shortId}.${ext}`);
+		}
+		return filePath;
+	}
+
 	private async writeNote(filePath: string, content: string, opts: AttachmentOptions): Promise<void> {
 		const existing = this.vault.getFileByPath(filePath);
 		if (existing instanceof TFile) {
