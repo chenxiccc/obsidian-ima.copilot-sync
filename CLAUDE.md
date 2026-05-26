@@ -79,18 +79,15 @@ obsidian vault="Obsidian" dev:errors
 
 ## 版本发布 / Version bump
 
-发布前先让用户提供发布说明，写入 `RELEASE_NOTES.md`，然后：
-
 ```bash
 npm version patch   # 4.7.0 → 4.7.1
 npm version minor   # 4.7.0 → 4.8.0
 npm version major   # 4.7.0 → 5.0.0
-git push --tags     # push 后 CI workflow 自动读取 RELEASE_NOTES.md 创建 Release
 ```
 
-`npm version` 会自动：改 `package.json` + `package-lock.json` → `scripts/sync-version.cjs` 同步 `manifest.json` + `versions.json` → `git commit` + `git tag`。
+`npm version` 会自动：改 `package.json` + `package-lock.json` → `scripts/sync-version.cjs` 同步 `manifest.json` + `versions.json` → `git commit` + `git tag` → `git push`（还需手动 push，或配 `postversion` 钩子）。
 
-**重要**：运行前确保工作区 clean，因为 `npm version` 会 commit。发布说明需在版本号变更前写入 `RELEASE_NOTES.md`。
+**重要**：运行前确保工作区 clean，因为 `npm version` 会 commit。
 
 ## 凭证存储
 
