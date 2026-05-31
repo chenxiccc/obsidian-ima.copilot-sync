@@ -165,7 +165,7 @@ export class FileDownloader {
 	private nodeHttpsGetBuffer(url: string, headers: Record<string, string>): Promise<Buffer> {
 		let https: typeof import('https');
 		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports, no-undef
+			// eslint-disable-next-line @typescript-eslint/no-require-imports
 			https = require('https') as typeof import('https');
 		} catch {
 			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');

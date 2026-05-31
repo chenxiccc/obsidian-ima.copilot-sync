@@ -159,7 +159,7 @@ interface SettingsHost {
 	saveSettings(): Promise<void>;
 	deleteKbFolder(...paths: string[]): Promise<void>;
 	migrateSyncFolder(oldFolder: string, newFolder: string): Promise<void>;
-	triggerSync(): void;
+	triggerSync(): Promise<void>;
 }
 
 export class ImaSettingTab extends PluginSettingTab {

@@ -32,7 +32,7 @@ export class HeadlessExtractor {
 		try {
 			const { remote } = require('electron');
 			RemoteBrowserWindow = remote.BrowserWindow;
-		} catch (e) {
+		} catch {
 			return null;
 		}
 		if (!RemoteBrowserWindow) {
@@ -103,7 +103,7 @@ export class HeadlessExtractor {
 	 */
 	private loadUrlWithTimeout(win: any, url: string): Promise<void> {
 		return new Promise<void>((resolve, _reject) => {
-			const timer = setTimeout(() => {
+			const timer = window.setTimeout(() => {
 				// 超时不 reject，仍尝试提取当前 DOM / Don't reject on timeout, still try to extract current DOM
 				resolve();
 			}, LOAD_TIMEOUT_MS);
@@ -113,14 +113,14 @@ export class HeadlessExtractor {
 			win.webContents.once('did-finish-load', () => {
 				if (finished) return;
 				finished = true;
-				clearTimeout(timer);
+				window.clearTimeout(timer);
 				resolve();
 			});
 
 			win.webContents.once('did-fail-load', (_event: any, _errorCode: number, _errorDescription: string) => {
 				if (finished) return;
 				finished = true;
-				clearTimeout(timer);
+				window.clearTimeout(timer);
 				resolve();
 			});
 
@@ -161,14 +161,14 @@ export class HeadlessExtractor {
 			} catch {
 				// executeJavaScript 在页面未就绪时可能抛异常 / executeJavaScript may throw if page isn't ready
 			}
-			await new Promise(r => setTimeout(r, CONTENT_POLL_INTERVAL_MS));
+			await new Promise(r => window.setTimeout(r, CONTENT_POLL_INTERVAL_MS));
 		}
 
 		// 触发基础懒加载：快速滚动触发图片 data-src 填充（参考 Share to Save headless-extractor.ts:222-225）
 		// Trigger basic lazy load: quick scroll triggers image data-src fill (ref: Share to Save headless-extractor.ts:222-225)
 		try {
 			await win.webContents.executeJavaScript('window.scrollTo(0, document.body.scrollHeight)');
-			await new Promise(r => setTimeout(r, 300));
+			await new Promise(r => window.setTimeout(r, 300));
 			await win.webContents.executeJavaScript('window.scrollTo(0, 0)');
 		} catch {
 			// 滚动失败不影响提取 / Scroll failure doesn't block extraction

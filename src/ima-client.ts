@@ -42,17 +42,6 @@ interface GetDocContentResponse {
 
 // 知识库相关接口 / Knowledge base related interfaces
 
-interface AddableKnowledgeBaseInfo {
-	id: string;
-	name: string;
-}
-
-interface ListAddableKBResponse {
-	addable_knowledge_base_list: AddableKnowledgeBaseInfo[];
-	next_cursor: string;
-	is_end: boolean;
-}
-
 // 知识库搜索结果 / Knowledge base search result
 export interface SearchedKnowledgeBase {
 	kb_id: string;
