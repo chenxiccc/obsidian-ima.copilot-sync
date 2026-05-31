@@ -114,6 +114,11 @@ export class FileDownloader {
 			'User-Agent': CHROME_UA,
 			...baseHeaders,
 		};
+		// 微信 CDN 图片需要 Referer 绕过防盗链（参考 Share to Save image-handler.ts:292-299）
+		// WeChat CDN images need Referer to bypass hotlink protection (ref: Share to Save image-handler.ts:292-299)
+		if (/qpic\.cn/.test(url) && !nodeHeaders['Referer']) {
+			nodeHeaders['Referer'] = 'https://mp.weixin.qq.com/';
+		}
 
 		try {
 			await this.downloadViaNodeHttps(url, destPath, nodeHeaders);

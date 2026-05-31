@@ -247,6 +247,20 @@ export function escapeInlineHash(text: string): string {
  * to avoid false matches like .md in community.obsidian.md)
  */
 export function guessFileExtension(url: string): string {
+	// 微信 CDN 图片：从 wx_fmt 参数推断格式，比 pathname 和 Content-Type 更可靠（参考 Share to Save image-handler.ts:65-76）
+	// WeChat CDN images: infer format from wx_fmt param, more reliable than pathname and Content-Type (ref: Share to Save image-handler.ts:65-76)
+	try {
+		const wxFmt = new URL(url).searchParams.get('wx_fmt');
+		if (wxFmt) {
+			const fmt = wxFmt.toLowerCase();
+			if (fmt === 'jpeg' || fmt === 'jpg') return '.jpg';
+			if (fmt === 'png') return '.png';
+			if (fmt === 'gif') return '.gif';
+			if (fmt === 'webp') return '.webp';
+			if (fmt === 'svg') return '.svg';
+		}
+	} catch { /* ignore parse errors */ }
+
 	// 仅检查 URL 的 path + query + fragment，避免域名中的 .md/.pdf 等被误匹配
 	// Only check path + query + fragment, avoid false match on hostname (e.g., .md in obsidian.md)
 	let target = url;

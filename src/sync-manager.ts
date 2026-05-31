@@ -763,6 +763,7 @@ export class SyncManager {
 		mediaId: string,
 		wechatConverter?: (html: string, url: string) => HtmlToMdResult,
 	): Promise<string> {
+		let headlessTried = false;
 		try {
 			// 构建基础请求头（requestUrl 不支持自定义 UA/Referer，会被 Chromium 安全策略剥离）
 			// Build base headers (requestUrl cannot send custom UA/Referer — stripped by Chromium security policy)
@@ -772,44 +773,73 @@ export class SyncManager {
 			};
 
 			let html: string;
-			try {
-				// 首选 requestUrl / Try requestUrl first
-				const response = await requestUrl({
-					url,
-					method: 'GET',
-					headers: baseHeaders,
-					throw: false,
-				});
+			// 微信 + downloadEnhanced：跳过 Node.js，直接 headless（微信是 Vue SPA，Node.js 拿到的是空壳）
+			// WeChat + downloadEnhanced: skip Node.js, go straight to headless (WeChat is Vue SPA, Node.js gets empty shell)
+			// 参考 Share to Save: downloader.ts:69-71, 293-295
+			const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
+			if (wechatConverter && isWeChatPage && this.settings.downloadEnhanced) {
+				headlessTried = true;
+				const headlessHtml = await this.headlessExtractor.extractRenderedHtml(url);
+				if (headlessHtml && HeadlessExtractor.hasWeChatContent(headlessHtml)) {
+					html = headlessHtml;
+					// 直接跳到转换阶段，跳过后续的 headless 回退
+					// Skip to conversion phase, bypass subsequent headless fallback
+				} else {
+					// headless 失败 → 降级到 Node.js 兜底
+					// headless failed → fallback to Node.js
+					console.warn(`ima.copilot Sync: Headless 提取失败，降级到 Node.js / Headless failed, falling back to Node.js: ${url}`);
+					try {
+						const nodeHeaders: Record<string, string> = {
+							'User-Agent': CHROME_UA,
+							...baseHeaders,
+						};
+						html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
+					} catch (nodeErr) {
+						// Node.js 也失败 → 跳转到外层 catch 的兜底处理
+						// Node.js also failed → jump to outer catch fallback
+						throw nodeErr;
+					}
+				}
+			} else {
+				try {
+					// 首选 requestUrl / Try requestUrl first
+					const response = await requestUrl({
+						url,
+						method: 'GET',
+						headers: baseHeaders,
+						throw: false,
+					});
 
-				if (response.status >= 400) {
-					throw new Error(`HTTP ${response.status}`);
+					if (response.status >= 400) {
+						throw new Error(`HTTP ${response.status}`);
+					}
+
+					html = response.text;
+				} catch (requestUrlErr) {
+					// requestUrl 失败，检查防盗链增强开关
+					// requestUrl failed, check anti-hotlink enhanced flag
+					if (!this.settings.downloadEnhanced) {
+						throw requestUrlErr;
+					}
+
+					const requestUrlMsg = requestUrlErr instanceof Error ? requestUrlErr.message : String(requestUrlErr);
+					console.warn(`ima.copilot Sync: requestUrl 网页获取失败，尝试 Node.js 兜底 / requestUrl web fetch failed, trying Node.js fallback: ${requestUrlMsg}`);
+
+					// Node.js https 可可靠发送自定义 UA/Referer，设置 Chrome UA 绕过防盗链
+					// Node.js https can reliably send custom UA/Referer, set Chrome UA to bypass anti-hotlink
+					const nodeHeaders: Record<string, string> = {
+						'User-Agent': CHROME_UA,
+						...baseHeaders,
+					};
+					html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 				}
 
-				html = response.text;
-			} catch (requestUrlErr) {
-				// requestUrl 失败，检查防盗链增强开关
-				// requestUrl failed, check anti-hotlink enhanced flag
-				if (!this.settings.downloadEnhanced) {
-					throw requestUrlErr;
-				}
-
-				const requestUrlMsg = requestUrlErr instanceof Error ? requestUrlErr.message : String(requestUrlErr);
-				console.warn(`ima.copilot Sync: requestUrl 网页获取失败，尝试 Node.js 兜底 / requestUrl web fetch failed, trying Node.js fallback: ${requestUrlMsg}`);
-
-				// Node.js https 可可靠发送自定义 UA/Referer，设置 Chrome UA 绕过防盗链
-				// Node.js https can reliably send custom UA/Referer, set Chrome UA to bypass anti-hotlink
-				const nodeHeaders: Record<string, string> = {
-					'User-Agent': CHROME_UA,
-					...baseHeaders,
-				};
-				html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 			}
-
 			const result = wechatConverter
 				? wechatConverter(html, url)
 				: convertHtmlToMarkdown(html, { url });
 
-			const frontmatter = this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl);
+			const frontmatter = this.buildWebFrontmatter(url, result.author, result.published, mediaId);
 
 			const parts: string[] = [frontmatter];
 			const effectiveTitle = result.title || title;
@@ -828,10 +858,7 @@ export class SyncManager {
 			// 静态 HTML 很大（>500KB JS）但提取内容很短（<2000 chars）→ JS 渲染页面，headless 可能有更多内容
 			// Large static HTML (>500KB JS) but short extracted content (<2000 chars) → JS-rendered page, headless may yield more
 			const looksLikeJsPage = html.length > 500_000 && (result.content?.trim().length || 0) < 2000;
-			// Headless 仅对微信页面有意义（其他平台要么是 SSR 要么有自己的提取策略）
-		// Headless is only meaningful for WeChat pages (other platforms are SSR or have their own strategy)
-		const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
-		if (wechatConverter && isWeChatPage && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
+		if (!headlessTried && wechatConverter && isWeChatPage && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
 				if (this.settings.downloadEnhanced) {
 					const headless = await this.tryHeadlessExtraction(url, wechatConverter);
@@ -842,12 +869,13 @@ export class SyncManager {
 						result.author = headless.result.author || result.author;
 						result.fromMeta = false;
 						parts.length = 0;
-						parts.push(this.buildWebFrontmatter(url, result.author, result.published, mediaId, result.authorUrl));
+						parts.push(this.buildWebFrontmatter(url, result.author, result.published, mediaId));
 						const hdTitle = result.title || title;
 						if (hdTitle) {
 							parts.push(`# ${hdTitle}\n`);
 						}
 						headlessSucceeded = true;
+						headlessTried = true;
 					}
 				}
 				if (!headlessSucceeded) {
@@ -874,12 +902,12 @@ export class SyncManager {
 				const msg = err instanceof Error ? err.message : String(err);
 				console.warn(`ima.copilot Sync: All static extraction failed for "${title}": ${msg}`);
 
-				// 尝试 headless 作为最后手段 / Attempt headless as last resort
-				if (this.settings.downloadEnhanced) {
+				// 尝试 headless 作为最后手段（如果尚未尝试）/ Attempt headless as last resort (if not already tried)
+				if (this.settings.downloadEnhanced && !headlessTried) {
 					try {
 						const headless = await this.tryHeadlessExtraction(url, convertWeChatHtmlToMarkdown);
 						if (headless) {
-							const frontmatter = this.buildWebFrontmatter(url, headless.result.author, headless.result.published, mediaId, headless.result.authorUrl);
+							const frontmatter = this.buildWebFrontmatter(url, headless.result.author, headless.result.published, mediaId);
 							const hdParts: string[] = [frontmatter];
 							const hdTitle = headless.result.title || title;
 							if (hdTitle) {
@@ -901,20 +929,14 @@ export class SyncManager {
 	 * 构建网页条目的 YAML frontmatter
 	 * Build YAML frontmatter for web content items
 	 */
-	private buildWebFrontmatter(source: string, author: string, published: string, mediaId: string, authorUrl?: string): string {
+	private buildWebFrontmatter(source: string, author: string, published: string, mediaId: string): string {
 		const lines: string[] = ['---'];
 		lines.push(`source: "${source}"`);
 		lines.push(`media_id: "${mediaId}"`);
 
 		if (author) {
 			lines.push('author:');
-			if (authorUrl) {
-				// 有 URL → Markdown 链接 / Has URL → Markdown link
-				lines.push(`  - "[${author}](${authorUrl})"`);
-			} else {
-				// 无 URL → 纯文本 / No URL → plain text
-				lines.push(`  - "${author}"`);
-			}
+			lines.push(`  - "${author}"`);
 		}
 
 		if (published) {

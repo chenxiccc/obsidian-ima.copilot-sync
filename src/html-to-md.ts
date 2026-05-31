@@ -3,18 +3,11 @@ import type { DefuddleOptions, DefuddleResponse } from 'defuddle/full';
 
 // ─── HTML→Markdown 转换器（基于 defuddle）/ HTML→Markdown converter (defuddle-based) ────
 
-/** defuddle npm 发布版暂缺 authorUrl 字段，本地扩展 / npm release of defuddle is missing authorUrl; local extension */
-interface DefuddleResult extends DefuddleResponse {
-	authorUrl?: string;
-}
-
 /** 转换结果 / Conversion result */
 export interface HtmlToMdResult {
 	title: string;
 	/** 作者 / Author */
 	author: string;
-	/** 作者主页 URL / Author profile URL */
-	authorUrl?: string;
 	/** 发布时间（ISO 日期或日期时间字符串）/ Published time (ISO date or datetime string) */
 	published: string;
 	content: string;
@@ -67,7 +60,6 @@ export function convertHtmlToMarkdown(
 	return {
 		title: result.title ?? '',
 		author: result.author ?? '',
-		authorUrl: (result as DefuddleResult).authorUrl,
 		published,
 		content: result.content ?? '',
 	};
@@ -93,6 +85,28 @@ function extractWeChatPublishTime(html: string): string | null {
 				return date.toISOString().slice(0, 19);
 			}
 		} catch { /* ignore */ }
+	}
+
+	// 次选从 create_time JS 变量提取（参考 Share to Save metadata-extractor.ts:230-250）
+	// Fallback to create_time JS variable (ref: Share to Save metadata-extractor.ts:230-250)
+	// 匹配多种赋值格式 / Match multiple assignment formats:
+	//   create_time: JsDecode('1234567890')
+	//   create_time: "1234567890"
+	//   create_time: '1234567890'
+	const ctPatterns = [
+		/create_time\s*[:=]\s*JsDecode\s*\(\s*['"](\d{10})['"]\s*\)/i,
+		/create_time\s*[:=]\s*['"](\d{10})['"]/i,
+	];
+	for (const re of ctPatterns) {
+		const ctMatch = html.match(re);
+		if (ctMatch?.[1]) {
+			try {
+				const date = new Date(Number(ctMatch[1]) * 1000);
+				if (!isNaN(date.getTime())) {
+					return date.toISOString().slice(0, 19);
+				}
+			} catch { /* ignore */ }
+		}
 	}
 
 	// 次选从 createTime 变量提取预格式化字符串
@@ -188,7 +202,7 @@ function extractWeChatMetaContent(
  */
 export const WECHAT_CONTENT_SELECTORS = [
 	'#js_content', '.rich_media_content',
-	'.share_content_page', '#img_list',
+	'.share_content_page',
 	'#js_video_page_title',
 	'#js_audio_title', '#audio_panel_area',
 	'#js_text_title',
@@ -247,88 +261,230 @@ function detectWeChatContentSelector(doc: Document): string | null {
  * Check if the page is a WeChat verification/block page (not a real article)
  */
 function isWeChatBlockPage(doc: Document): boolean {
+	// 参考 Share to Save: headless-extractor.ts:147-150 hasCaptcha()
+	const text = doc.body?.textContent || '';
 	return !!doc.querySelector('.weui-msg')
-		|| (doc.body?.textContent || '').includes('环境异常')
-		|| /captcha/i.test(doc.body?.textContent || '');
+		|| text.includes('环境异常')
+		|| text.includes('请完成安全验证')
+		|| text.includes('操作频繁')
+		|| /captcha/i.test(text)
+		|| /js_verify/i.test(text)
+		|| /verify_container/i.test(text);
 }
 
 /**
- * 从微信 HTML 中提取正文内的图片 URL 并转为 Markdown
- * Extract in-content image URLs from WeChat HTML and convert to Markdown
+ * 微信文章 DOM 预处理：data-src 提升、UI 移除、图片去重 → 构建干净 DOM
+ * WeChat article DOM preprocessing: data-src promotion, UI removal, image dedup → clean DOM
  *
- * 用于弥补 defuddle 对图片分享页等格式过滤图片的缺陷
- * Compensates for defuddle filtering images in formats like image share pages
+ * 参考 Share to Save: content-converter.ts:144-247 WeChatConverter.buildCleanHtml()
+ * Reference: Share to Save content-converter.ts:144-247
+ *
+ * 在 defuddle 转换前对 DOM 克隆做预处理，将工作从 Markdown 后正则 hack 转变为转换前 DOM 操作
+ * Preprocess DOM clone before defuddle conversion, shifting work from post-Markdown regex hacks
  */
+function buildCleanWeChatDom(doc: Document): string {
+	const clone = doc.documentElement.cloneNode(true) as HTMLElement;
+
+	// ── 1. <img data-src> → <img src>（参考 content-converter.ts:148-154）──
+	// Promote data-src on img elements when src is empty/SVG placeholder/pic_blank
+	clone.querySelectorAll('img').forEach(img => {
+		const ds = img.getAttribute('data-src');
+		if (!ds) return;
+		const currentSrc = img.getAttribute('src') || '';
+		if (!currentSrc || currentSrc.startsWith('data:') || currentSrc.includes('pic_blank')) {
+			img.setAttribute('src', ds);
+		}
+	});
+
+	// ── 2. 父级 <div data-src> → 子 <img src>（Swiper 懒加载陷阱）（参考 content-converter.ts:156-167）──
+	// Promote parent <div data-src> to child <img src> for Swiper lazy-loaded images
+	clone.querySelectorAll('[data-src]').forEach(el => {
+		if (el.tagName === 'IMG') return;
+		const ds = el.getAttribute('data-src');
+		if (!ds) return;
+		el.querySelectorAll('img').forEach(img => {
+			if (!img.getAttribute('src') || img.src.includes('pic_blank')) {
+				img.setAttribute('src', ds);
+			}
+		});
+	});
+
+	// ── 3. 移除微信 UI 元素（参考 content-converter.ts:169-189）──
+	// Remove WeChat UI elements (reward, profile, ads, Swiper indicator, etc.)
+	const uiSelectors = [
+		'.reward_area', '.reward_qrcode', '.reward_setting',
+		'.profile_area', '.profile_inner',
+		'.rich_media_area_extra', '.rich_media_meta_list',
+		'.reward_area-normal', '.reward_user',
+		'#js_pc_qr_code', '.qr_code_pc_outer',
+		'[class*="reward"]', '[class*="赞赏"]',
+		'#js_reward_area', '#js_bottom_ad',
+		'.original_panel', '.global_vip_guide',
+		'mp-common-profile', 'mp-common-mpaudio',
+		// Swiper 占位符和 UI 元素 / Swiper placeholder and UI elements
+		'.share_media_swiper_placeholder',
+		'.swiper_indicator_wrp',
+		'.swiper_indicator_wrp_pc',
+		'.right-bottom_area',
+	];
+	uiSelectors.forEach(sel => {
+		try { clone.querySelectorAll(sel).forEach(n => n.remove()); } catch { /* skip */ }
+	});
+
+	// ── 4. 代码块预处理（参考 content-converter.ts:191-228）──
+	// Code block preprocessing: merge multi <code>, extract data-lang, unwrap <span>, <br> → newline
+	// a) code-snippet__fix 老格式：移除行号 <ul>，解包 <section>
+	// Old format: remove line number <ul>, unwrap <section>
+	clone.querySelectorAll('.code-snippet__fix').forEach(section => {
+		section.querySelectorAll('.code-snippet__line-index').forEach(el => el.remove());
+		const p = section.parentNode;
+		if (p) {
+			while (section.firstChild) p.insertBefore(section.firstChild, section);
+			section.remove();
+		}
+	});
+	// b) <pre> 内多 <code> 合并为单 <code> + data-lang → class
+	// Merge multi <code> into single <code> + data-lang to class
+	clone.querySelectorAll('pre').forEach(pre => {
+		const codeEls = Array.from(pre.querySelectorAll(':scope > code'));
+		if (codeEls.length > 1) {
+			const lines = codeEls.map(c => c.textContent || '');
+			const lang = pre.getAttribute('data-lang') || '';
+			pre.innerHTML = '';
+			const newCode = document.createElement('code');
+			if (lang) newCode.className = `language-${lang}`;
+			newCode.textContent = lines.join('\n');
+			pre.appendChild(newCode);
+		} else if (codeEls.length === 1 && pre.getAttribute('data-lang')) {
+			(codeEls[0] as Element).classList.add(`language-${pre.getAttribute('data-lang')}`);
+		}
+		// c) 解包所有 <span> 标签（移除语法高亮标签）/ Unwrap all <span>
+		pre.querySelectorAll('span').forEach(span => {
+			const sp = span.parentNode;
+			if (sp) {
+				while (span.firstChild) sp.insertBefore(span.firstChild, span);
+				span.remove();
+			}
+		});
+		// d) <br> → 换行符 / <br> → newline
+		pre.querySelectorAll('br').forEach(br => {
+			br.replaceWith(document.createTextNode('\n'));
+		});
+	});
+
+	// ── 5. DOM 内图片去重：按 URL pathname，消除 Swiper 循环复制（参考 content-converter.ts:229-244）──
+	// Image dedup in DOM: by URL pathname, eliminate Swiper loop duplicates
+	const seenPathnames = new Set<string>();
+	clone.querySelectorAll('img').forEach(img => {
+		const url = img.getAttribute('src') || '';
+		if (!url || !/^https?:\/\//.test(url)) return;
+		try {
+			const p = new URL(url);
+			const key = p.hostname.endsWith('.qpic.cn') ? p.origin + p.pathname : url;
+			if (seenPathnames.has(key)) {
+				img.remove();
+			} else {
+				seenPathnames.add(key);
+			}
+		} catch { /* keep image if URL parse fails */ }
+	});
+
+	// ── 6. 包装为完整 HTML 返回（参考 content-converter.ts:246）──
+	// Wrap as complete HTML document
+	return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + clone.querySelector('body')!.innerHTML + '</body></html>';
+}
+
+
 /**
  * 标准化 mmbiz 图片 URL 用于去重（去除查询参数，统一子域名）
  * Normalize mmbiz image URL for dedup (strip query params, normalize subdomain)
+ *
+ * 对 qpic.cn 域名使用 origin + pathname 去重，其他域名保持原 URL
+ * For qpic.cn domains, use origin + pathname for dedup; keep original URL for others
+ * 参考 Share to Save: content-converter.ts:284-290 normalizeForDedup()
  */
 function normalizeImgUrl(url: string): string {
 	try {
 		const u = new URL(url);
-		// 去掉查询参数 / Strip query params
-		return u.origin + u.pathname;
+		// qpic.cn 域名去查询参数 / Strip query params for qpic.cn
+		if (u.hostname.endsWith('.qpic.cn')) return u.origin + u.pathname;
+		return url;
 	} catch {
 		const idx = url.indexOf('?');
 		return idx >= 0 ? url.substring(0, idx) : url;
 	}
 }
 
+/**
+ * 全页扫描补充 Turndown/defuddle 遗漏的图片（最终安全网）
+ * Full-page scan to supplement images missed by Turndown/defuddle (final safety net)
+ *
+ * 过滤策略（按顺序执行，参考 Share to Save: content-converter.ts:271-324 supplementImages()）：
+ * Filter strategy (executed in order, ref: Share to Save content-converter.ts:271-324):
+ *
+ * 1. data-src 优先（懒加载），回退 src / data-src preferred (lazy load), fallback src
+ * 2. 系统图排除：pic_blank.gif、res.wx.qq.com/mmbizappmsg / System image exclusion
+ * 3. 域名过滤：只保留 mmbiz.qpic.cn（不依赖 URL 参数如 from=appmsg）/ Domain filter: only mmbiz.qpic.cn
+ * 4. 推荐缩略图排除：<a> 内图片 / Thumbnail exclusion: images inside <a>
+ * 5. 头像排除：.wx_follow_avatar、.jump_author_avatar_con 内图片 / Avatar exclusion
+ * 6. 容器边界过滤（核心门槛）：只补充 .img_swiper_area 或 #js_content 内图片 / Container boundary
+ * 7. seen 预填充 + URL 归一化去重，防止 Swiper 循环复制 / Seen prefill + URL norm dedup
+ */
 function extractWeChatImages(html: string, doc: Document, existingContent: string): string {
 	const seen = new Set<string>();
-	const seenNormalized = new Set<string>();
 	const parts: string[] = [];
 
-	// 先收集已有 Markdown 中的图片 URL 用于去重 / Collect existing Markdown image URLs for dedup
-	const mdImgRegex = /!\[.*\]\((https?:\/\/[^)]+)\)/g;
+	// ── 收集已有 Markdown 中的图片 URL 用于去重 / Collect existing Markdown image URLs ──
+	const mdImgRegex = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g;
 	let mdMatch: RegExpExecArray | null;
 	while ((mdMatch = mdImgRegex.exec(existingContent)) !== null) {
 		if (mdMatch[1]) {
 			seen.add(mdMatch[1]);
-			seenNormalized.add(normalizeImgUrl(mdMatch[1]));
+			seen.add(normalizeImgUrl(mdMatch[1]));
 		}
 	}
 
-	// 全 DOM 搜索 img 标签，并通过 from=appmsg 过滤推荐缩略图
-	// Full DOM img search, filtered by from=appmsg to exclude recommendation thumbnails
+	// ── seen 预填充 / Seen prefill（参考 content-converter.ts:294-301）──
+	// 收集已处理容器内图片 URL，防 swiper 循环复制和 Turndown/defuddle 重复
+	// Collect image URLs from processed containers to prevent swiper loop dupes
+	const prefillContainers = doc.querySelectorAll('.img_swiper_area img, #js_content img');
+	for (const el of Array.from(prefillContainers)) {
+		const img = el as HTMLImageElement;
+		const url = img.getAttribute('data-src') || img.src;
+		if (url && /^https?:\/\//.test(url)) {
+			seen.add(normalizeImgUrl(url));
+		}
+	}
+
+	// ── DOM <img> 扫描 / DOM <img> scan（参考 content-converter.ts:304-322）──
 	for (const img of Array.from(doc.querySelectorAll('img'))) {
-		const imgUrl = img.getAttribute('data-src') || img.src;
-		if (!imgUrl || !/^https?:\/\//.test(imgUrl)) continue;
-		// 过滤系统资源 / Filter system resources
-		if (imgUrl.includes('pic_blank.gif')) continue;
-		if (imgUrl.includes('res.wx.qq.com/mmbizappmsg')) continue;
-		// 正文图片特征 / Content image indicator
-		if (!imgUrl.includes('from=appmsg')) continue;
-		const normalized = normalizeImgUrl(imgUrl);
-		if (seen.has(imgUrl) || seenNormalized.has(normalized)) continue;
-		seen.add(imgUrl);
-		seenNormalized.add(normalized);
-		parts.push(`![${(img as HTMLImageElement).alt || ''}](${imgUrl})`);
-	}
+		// 1. data-src 优先（懒加载），回退 src / data-src preferred, fallback src
+		const url = img.getAttribute('data-src') || img.src;
+		if (!url || !/^https?:\/\//.test(url)) continue;
 
-	// cdn_url 中含 from=appmsg 的正文图片（轮播中隐藏的图不在 DOM 里）
-	// Content images from cdn_url with from=appmsg (hidden swiper images not in DOM)
-	const cdnRegex = /cdn_url\s*:\s*['"](https?:\/\/[^'"]*?from=appmsg[^'"]*?)['"]/gi;
-	let cdnMatch: RegExpExecArray | null;
-	while ((cdnMatch = cdnRegex.exec(html)) !== null) {
-		const imgUrl = cdnMatch[1] as string;
-		const normalized = normalizeImgUrl(imgUrl);
-		if (seen.has(imgUrl) || seenNormalized.has(normalized)) continue;
-		seen.add(imgUrl);
-		seenNormalized.add(normalized);
-		parts.push(`![](${imgUrl})`);
-	}
+		// 2. 系统图排除 / System image exclusion
+		if (url.includes('pic_blank.gif')) continue;
+		if (url.includes('res.wx.qq.com/mmbizappmsg')) continue;
 
-	// data-src 模式 / data-src pattern
-	const dataSrcRegex = /data-src="(https?:\/\/[^"]+?(?:mmbiz|qpic)[^"]*?(?:jpe?g|png|gif|webp)[^"]*?)"/gi;
-	let dsMatch: RegExpExecArray | null;
-	while ((dsMatch = dataSrcRegex.exec(html)) !== null) {
-		const imgUrl = dsMatch[1] as string;
-		if (imgUrl.includes('pic_blank.gif')) continue;
-		if (imgUrl.includes('res.wx.qq.com/mmbizappmsg')) continue;
-		if (seen.has(imgUrl)) continue;
-		seen.add(imgUrl);
-		parts.push(`![](${imgUrl})`);
+		// 3. 域名过滤：只保留 mmbiz 图片 / Domain filter: only mmbiz images
+		if (!url.includes('mmbiz.qpic.cn')) continue;
+
+		// 4. <a> 内 → 推荐阅读缩略图 / Inside <a> → recommendation thumbnail
+		if (img.closest('a')) continue;
+
+		// 5. 头像容器内 → 头像 / Inside avatar containers → avatar
+		if (img.closest('.wx_follow_avatar, .jump_author_avatar_con')) continue;
+
+		// 6. 容器边界过滤（核心门槛）/ Container boundary (core gate)
+		if (!img.closest('.img_swiper_area, #js_content')) continue;
+
+		// 7. URL 归一化去重 / URL normalization dedup
+		const dedupKey = normalizeImgUrl(url);
+		if (seen.has(dedupKey)) continue;
+		seen.add(dedupKey);
+
+		const alt = img.alt || '';
+		parts.push(`![${alt}](${url})`);
 	}
 
 	return parts.length > 0 ? parts.join('\n') + '\n' : '';
@@ -344,6 +500,77 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 		return { title: '', author: '', published: '', content: '' };
 	}
 
+	// ── 检测两区域（参考 Share to Save content-converter.ts:48-67）──
+	// Detect two areas (ref: Share to Save content-converter.ts:48-67)
+	const jsContent = doc.getElementById('js_content');
+	const hasJsContent = jsContent && (jsContent.textContent?.trim().length || 0) > 0;
+	const imgSwiperArea = doc.querySelector('.img_swiper_area');
+	const hasSwiperImages = imgSwiperArea && imgSwiperArea.querySelectorAll('img').length >= 1;
+
+	// ── 主路径：两区域处理（headless 渲染后 HTML）──
+	// Main path: two-area processing (headless-rendered HTML)
+	// 区域 1 #js_content（文字 + 类型 A 图片）先于区域 2 .img_swiper_area（类型 B 图片）
+	// Area 1 #js_content (text + Type A images) before Area 2 .img_swiper_area (Type B images)
+	if (hasJsContent || hasSwiperImages) {
+		// DOM 预处理 / DOM preprocessing (ref: buildCleanWeChatDom)
+		const cleanedHtml = buildCleanWeChatDom(doc);
+		const cleanedDoc = parser.parseFromString(cleanedHtml, 'text/html');
+		const parts: string[] = [];
+
+		let area1Meta: HtmlToMdResult | null = null;
+
+		// 区域 1: #js_content — 文字 + 类型 A 图片（先入队）
+		// Area 1: #js_content — text + Type A images (first in queue)
+		if (hasJsContent) {
+			area1Meta = convertHtmlToMarkdown(cleanedHtml, { url, contentSelector: '#js_content', doc: cleanedDoc });
+			if (area1Meta.content?.trim()) {
+				parts.push(area1Meta.content);
+			}
+		}
+
+		// 区域 2: .img_swiper_area — 类型 B 图片（后入队，确保图片在文字后面）
+		// Area 2: .img_swiper_area — Type B images (second in queue, ensures images after text)
+		if (hasSwiperImages) {
+			const swiperImgs = extractSwiperAreaImages(cleanedDoc);
+			if (swiperImgs) {
+				parts.push(swiperImgs);
+			}
+		}
+
+		if (parts.length > 0) {
+			const publishTime = extractWeChatPublishTime(html);
+			// 作者补充：defuddle 可能提取不到，从 .wx_follow_nickname 补充（参考 content-converter.ts:90-95）
+			// Author supplement: defuddle may miss it; use .wx_follow_nickname (ref: content-converter.ts:90-95)
+			let author = area1Meta?.author || '';
+			if (!author) {
+				author = doc.querySelector('.wx_follow_nickname')?.textContent?.trim()
+					|| doc.querySelector('#js_name')?.textContent?.trim()
+					|| '';
+			}
+
+			const result: HtmlToMdResult = {
+				title: area1Meta?.title || '',
+				author,
+				published: area1Meta?.published || publishTime || '',
+				content: parts.join('\n'),
+			};
+
+			// 安全网：全页补充遗漏图片 / Safety net: supplement missed images
+			const imagesMarkdown = extractWeChatImages(html, doc, result.content);
+			if (imagesMarkdown && result.content) {
+				result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
+			}
+
+			// 话题标签 # 转义：微信 .wx_topic_link 中的 # 会被 Obsidian 误识别为标签（参考 Share to Save content-converter.ts:378-386）
+			// Topic tag # escaping: # in WeChat .wx_topic_link can be misinterpreted as Obsidian tags (ref: Share to Save content-converter.ts:378-386)
+			result.content = result.content.replace(/(^|\s)#/gm, '$1\\#');
+
+			return result;
+		}
+	}
+
+	// ── 回退路径：无 headless 渲染（静态 HTML 提取）──
+	// Fallback path: no headless render (static HTML extraction)
 	let result: HtmlToMdResult;
 
 	// Tier 1: 已知内容容器 / Known content containers
@@ -359,7 +586,6 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 			result = {
 				title: r.title || metaResult.title,
 				author: r.author,
-				authorUrl: r.authorUrl,
 				published: r.published || publishedFromCt || '',
 				content: r.content,
 				fromMeta: true,
@@ -377,16 +603,50 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 	if (imagesMarkdown && resultContent) {
 		result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
 		// Tier 2 (og:description) 补到图后清除 fromMeta，避免 headless 冗余触发
-		// Tier 2 (og:description) got images — clear fromMeta to avoid redundant headless
-		// Tier 1/3 的 fromMeta 保持原值（undefined），让 hasOrphanImages 继续生效
-		// Tier 1/3 keep original fromMeta (undefined) so hasOrphanImages can still trigger headless
+		// Tier 2 recovery: clear fromMeta if images were supplemented
 		if (result.fromMeta) {
 			result.fromMeta = false;
 		}
 	}
 
+	// 作者补充（回退路径也适用）/ Author supplement (applies to fallback paths too)
+	if (!result.author) {
+		result.author = doc.querySelector('.wx_follow_nickname')?.textContent?.trim()
+			|| doc.querySelector('#js_name')?.textContent?.trim()
+			|| '';
+	}
+
+	// 话题标签 # 转义（回退路径也适用）/ Topic tag # escaping (applies to fallback path too)
+	result.content = result.content.replace(/(^|\s)#/gm, '$1\\#');
+
 	return result;
 }
+
+/**
+ * 从预处理后的 DOM 提取 .img_swiper_area 内的图片 URL → Markdown
+ * Extract image URLs from .img_swiper_area in preprocessed DOM → Markdown
+ *
+ * .img_swiper_area 内只有图片，无需要保留的文字，直接用 URL 生成 Markdown
+ * .img_swiper_area only contains images, no text worth preserving; generate Markdown directly
+ */
+function extractSwiperAreaImages(doc: Document): string {
+	const swiperArea = doc.querySelector('.img_swiper_area');
+	if (!swiperArea) return '';
+
+	const parts: string[] = [];
+	const imgs = swiperArea.querySelectorAll('img');
+	for (const img of Array.from(imgs)) {
+		const url = img.getAttribute('src') || '';
+		if (!url || !/^https?:\/\//.test(url)) continue;
+		if (url.includes('pic_blank.gif')) continue;
+		if (!url.includes('mmbiz.qpic.cn')) continue;
+		const alt = (img as HTMLImageElement).alt || '';
+		parts.push(`![${alt}](${url})`);
+	}
+	return parts.length > 0 ? parts.join('\n') + '\n' : '';
+}
+
+
 
 // ─── 小红书文章提取 / Xiaohongshu article extraction ─────────────────────────
 

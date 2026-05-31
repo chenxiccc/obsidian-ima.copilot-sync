@@ -72,7 +72,7 @@ export interface ImaPluginSettings {
 	publicKnowledgeBases: PublicKnowledgeBase[];
 	/** ima 文件强制阅读模式 / Force reading mode for ima files */
 	forceReadingMode: boolean;
-	/** 下载增强（仅桌面端，含防盗链回退 + 微信文章 headless 提取）/ Download enhancement (desktop only, includes anti-hotlink fallback + WeChat headless extraction) */
+	/** 下载增强（仅桌面端，含防盗链回退 + 微信文章直接 headless 渲染提取）/ Download enhancement (desktop only, includes anti-hotlink fallback + WeChat direct headless extraction) */
 	downloadEnhanced: boolean;
 }
 
@@ -431,7 +431,7 @@ export class ImaSettingTab extends PluginSettingTab {
 				const header = kbListContainer.createDiv({ cls: 'ima-kb-group-header' });
 				header.textContent = '我加入的订阅知识库';
 				const warning = kbListContainer.createDiv({ cls: 'ima-kb-group-note ima-kb-group-note--warning' });
-				warning.textContent = '⚠ 笔记仅同步约 300 字预览；微信文章短链（如 mp.weixin.qq.com/s/XXXXX）可获取全文，长链（如 mp.weixin.qq.com/s?__biz=...）仅同步摘要（约 300 字正文 + AI 摘要），若希望长链也获取全文，可在微信中打开文章后复制链接，即可获得短链；文件仅同步 AI 摘要，无法下载原件';
+				warning.textContent = '⚠ 笔记仅同步约 300 字预览；微信文章桌面端可完整获取（需开启下载增强），移动端仅同步摘要；文件仅同步 AI 摘要，无法下载原件';
 				for (const base of subscribed) {
 					const row = kbListContainer.createDiv({ cls: 'ima-kb-row' });
 					const checkbox = row.createEl('input');
@@ -549,7 +549,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(kbBox)
 			.setName('添加公共知识库')
-			.setDesc('粘贴分享链接或 shareId，如 https://ima.qq.com/wiki/?shareId=xxx（⚠ 笔记仅同步约 300 字预览；微信文章短链（mp.weixin.qq.com/s/XXXXX）可获取全文，长链（含 __biz 参数）仅同步摘要；文件仅同步 AI 摘要）')
+			.setDesc('粘贴分享链接或 shareId，如 https://ima.qq.com/wiki/?shareId=xxx（⚠ 笔记仅同步约 300 字预览；微信文章桌面端可完整获取；文件仅同步 AI 摘要）')
 			.addText(text => {
 				text.setPlaceholder('粘贴分享链接或 shareId');
 				text.inputEl.addClass('ima-input-wide');
@@ -694,7 +694,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('下载增强（仅限桌面端）')
-			.setDesc('对防盗链图片/文件和微信公众号内容非常有效。开启后下载失败时自动使用 Node.js 回退重试，微信文章静态抓取失败时使用无头浏览器渲染提取完整内容')
+			.setDesc('对防盗链图片/文件和微信公众号内容非常有效。开启后下载失败时自动使用 Node.js 回退重试；微信文章直接使用无头浏览器渲染提取完整内容（不再尝试静态抓取）')
 			.addToggle(toggle => {
 				toggle
 					.setValue(Platform.isDesktop ? this.plugin.settings.downloadEnhanced : false)

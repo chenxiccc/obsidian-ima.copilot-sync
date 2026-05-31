@@ -59,6 +59,12 @@ export class HeadlessExtractor {
 			await this.loadUrlWithTimeout(win, url);
 
 			const html = await this.waitForContentAndExtract(win);
+			// 验证码检测：微信反爬验证页不具备有效内容（参考 Share to Save headless-extractor.ts:117-120）
+			// Captcha detection: WeChat anti-crawl page has no valid content (ref: Share to Save headless-extractor.ts:117-120)
+			if (html && HeadlessExtractor.hasCaptcha(html)) {
+				console.warn('ima.copilot Sync: 检测到微信验证码页面，建议稍后重试 / Detected WeChat captcha page, try again later');
+				return null;
+			}
 			return html;
 		} catch {
 			return null;
@@ -81,6 +87,15 @@ export class HeadlessExtractor {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * 检测 HTML 是否为微信验证码/反爬拦截页（参考 Share to Save headless-extractor.ts:147-150）
+	 * Check if HTML is a WeChat captcha/anti-crawl block page (ref: Share to Save headless-extractor.ts:147-150)
+	 */
+	static hasCaptcha(html: string): boolean {
+		const indicators = ['js_verify', 'verify_container', '环境异常', '请完成安全验证', '操作频繁'];
+		return indicators.some(ind => html.includes(ind));
 	}
 
 	/**
@@ -147,6 +162,16 @@ export class HeadlessExtractor {
 				// executeJavaScript 在页面未就绪时可能抛异常 / executeJavaScript may throw if page isn't ready
 			}
 			await new Promise(r => setTimeout(r, CONTENT_POLL_INTERVAL_MS));
+		}
+
+		// 触发基础懒加载：快速滚动触发图片 data-src 填充（参考 Share to Save headless-extractor.ts:222-225）
+		// Trigger basic lazy load: quick scroll triggers image data-src fill (ref: Share to Save headless-extractor.ts:222-225)
+		try {
+			await win.webContents.executeJavaScript('window.scrollTo(0, document.body.scrollHeight)');
+			await new Promise(r => setTimeout(r, 300));
+			await win.webContents.executeJavaScript('window.scrollTo(0, 0)');
+		} catch {
+			// 滚动失败不影响提取 / Scroll failure doesn't block extraction
 		}
 
 		try {
