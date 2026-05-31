@@ -28,7 +28,7 @@
 
   - **笔记**：完整同步内容并转为 Markdown
   - **网页**：提取正文内容并转为 Markdown（但部分需要登录或者有反爬措施的无法绕过)
-  - **微信文章**：四层回退提取——优先静态抓取完整图文；自动检测标准图文/图片分享页等格式；JS 动态渲染页面通过无头浏览器提取（含图片，仅桌面端）；极端情况下回退到 meta 标签文本
+  - **微信文章**：桌面端开启下载增强后通过无头浏览器渲染完整提取（含图片），支持所有微信文章格式（标准图文、图片分享页/小绿书等）；移动端回退到 meta 标签文本提取（仅文字）
   - **文件**（PDF、Word、PPT、Excel 等）：个人/共享知识库可下载到本地；订阅/公共知识库仅同步 AI 摘要
 - **增量同步**：仅同步上次同步后有修改的笔记，减少不必要的请求
 - **自动定时同步**：按设定间隔自动在后台同步
@@ -72,7 +72,7 @@
 
 - **订阅/公共知识库内容受限(个人知识库不受此限制)**：IMA API 对订阅知识库有访问限制，各类型内容的同步能力如下：
   - 笔记：仅同步约 300 字预览，无法获取完整内容
-  - 微信文章：三层回退提取——静态渲染文章可抓取完整图文；JS 动态渲染文章从 og:description meta 提取完整正文（缺图片，附原文链接）；极端失败时回退到 IMA 摘要
+  - 微信文章：桌面端可完整提取（需开启下载增强），支持所有微信文章格式；移动端回退到 meta 标签文本提取（仅文字，无图片）
   - 文件（PDF/Word 等）：仅同步 AI 摘要，无法下载原件
   - 网页：可抓取完整正文
 - 知识库中部分条目如果 IMA API 未返回可访问的 URL，将仅同步标题（显示为占位符）
@@ -110,7 +110,7 @@ Forward WeChat official account articles to IMA, then auto-sync the content to O
 
   - **Notes**: Full content converted to Markdown
   - **Webpages**: Extracts main content and converts to Markdown (but sites requiring login or with anti-scraping measures cannot be bypassed)
-  - **WeChat articles**: Three-tier fallback — full content with images when statically rendered; full text from meta tags for JS-rendered pages (no images); IMA fallback in edge cases
+  - **WeChat articles**: Full extraction via headless browser on desktop (with download enhancement enabled), supports all WeChat article formats; falls back to meta tag text extraction on mobile (text only, no images)
   - **Files** (PDF, Word, PPT, Excel, etc.): Personal/shared KBs can download locally; subscribed/public KBs get AI summary only
 - **Incremental sync**: Only fetches notes modified since the last sync
 - **Auto periodic sync**: Runs silently in the background on a configurable interval
@@ -154,7 +154,7 @@ Click **「测试」** to verify the connection.
 
 - **Subscribed/Public knowledge base content is limited (Personal knowledge base is not affected by this limitation)**: IMA API restricts access to subscribed knowledge bases. Sync capabilities by content type:
   - Notes: Only ~300 character preview, full content not available
-  - WeChat articles: Three-tier fallback — statically rendered articles get full content with images; JS-rendered articles extract full text from og:description meta (no images, with original link); IMA fallback in extreme edge cases
+  - WeChat articles: Full extraction on desktop (with download enhancement enabled), supports all WeChat article formats; falls back to meta tag text extraction on mobile (text only, no images)
   - Files (PDF/Word etc.): Only AI summary available, original files cannot be downloaded
   - Webpages: Full content can be fetched
 - Some knowledge base items may only sync the title (shown as a placeholder) if the IMA API does not return an accessible URL
