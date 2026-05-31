@@ -5,10 +5,7 @@ main.js
 .DS_Store
 ima-debug.log
 docs/
-CLAUDE.md
+CLAUDE*.md
 .claude/
 .playwright-mcp/
 .eslintcache
-CLAUDE-READING-MODE.md
-CLAUDE-API.md
-CLAUDE-DESIGN.md
