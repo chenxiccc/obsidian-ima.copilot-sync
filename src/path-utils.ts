@@ -237,7 +237,7 @@ export function escapeInlineHash(text: string): string {
 		// 行首 #{1,6} 后跟空格是标题，保留 / Line starting with #{1,6} followed by space is a heading, preserve
 		if (/^#{1,6}\s/.test(line)) return line;
 		// 其他 # 后跟非空格字符的，加 \ 转义 / Escape other # followed by non-space
-		return line.replace(/#(?!\s)/g, '\\#');
+		return line.replace(/(?<!\\)#(?!\s)/g, '\\#');
 	}).join('\n');
 }
 

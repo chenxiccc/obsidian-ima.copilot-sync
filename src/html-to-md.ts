@@ -263,8 +263,7 @@ function detectWeChatContentSelector(doc: Document): string | null {
 function isWeChatBlockPage(doc: Document): boolean {
 	// 参考 Share to Save: headless-extractor.ts:147-150 hasCaptcha()
 	const text = doc.body?.textContent || '';
-	return !!doc.querySelector('.weui-msg')
-		|| text.includes('环境异常')
+		return text.includes('环境异常')
 		|| text.includes('请完成安全验证')
 		|| text.includes('操作频繁')
 		|| /captcha/i.test(text)
@@ -561,10 +560,6 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 				result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
 			}
 
-			// 话题标签 # 转义：微信 .wx_topic_link 中的 # 会被 Obsidian 误识别为标签（参考 Share to Save content-converter.ts:378-386）
-			// Topic tag # escaping: # in WeChat .wx_topic_link can be misinterpreted as Obsidian tags (ref: Share to Save content-converter.ts:378-386)
-			result.content = result.content.replace(/(^|\s)#/gm, '$1\\#');
-
 			return result;
 		}
 	}
@@ -615,9 +610,6 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 			|| doc.querySelector('#js_name')?.textContent?.trim()
 			|| '';
 	}
-
-	// 话题标签 # 转义（回退路径也适用）/ Topic tag # escaping (applies to fallback path too)
-	result.content = result.content.replace(/(^|\s)#/gm, '$1\\#');
 
 	return result;
 }
