@@ -281,8 +281,10 @@ function isWeChatBlockPage(doc: Document): boolean {
  * 在 defuddle 转换前对 DOM 克隆做预处理，将工作从 Markdown 后正则 hack 转变为转换前 DOM 操作
  * Preprocess DOM clone before defuddle conversion, shifting work from post-Markdown regex hacks
  */
-function buildCleanWeChatDom(doc: Document): string {
-	const clone = doc.documentElement.cloneNode(true) as HTMLElement;
+function buildCleanWeChatDom(doc: Document): Document {
+	const sourceBody = doc.querySelector('body');
+	if (!sourceBody) return document.implementation.createHTMLDocument('');
+	const clone = sourceBody.cloneNode(true) as HTMLElement;
 
 	// ── 1. <img data-src> → <img src>（参考 content-converter.ts:148-154）──
 	// Promote data-src on img elements when src is empty/SVG placeholder/pic_blank
@@ -388,9 +390,11 @@ function buildCleanWeChatDom(doc: Document): string {
 		} catch { /* keep image if URL parse fails */ }
 	});
 
-	// ── 6. 包装为完整 HTML 返回（参考 content-converter.ts:246）──
-	// Wrap as complete HTML document
-	return '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' + clone.querySelector('body')!.innerHTML + '</body></html>';
+	// ── 6. 挂载到新 Document 返回（参考 content-converter.ts:246）──
+	// Mount into a new Document (ref: content-converter.ts:246)
+	const newDoc = document.implementation.createHTMLDocument('');
+	newDoc.querySelector('body')!.replaceWith(clone);
+	return newDoc;
 }
 
 
@@ -429,7 +433,7 @@ function normalizeImgUrl(url: string): string {
  * 6. 容器边界过滤（核心门槛）：只补充 .img_swiper_area 或 #js_content 内图片 / Container boundary
  * 7. seen 预填充 + URL 归一化去重，防止 Swiper 循环复制 / Seen prefill + URL norm dedup
  */
-function extractWeChatImages(html: string, doc: Document, existingContent: string): string {
+function extractWeChatImages(doc: Document, existingContent: string): string {
 	const seen = new Set<string>();
 	const parts: string[] = [];
 
@@ -512,8 +516,7 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 	// Area 1 #js_content (text + Type A images) before Area 2 .img_swiper_area (Type B images)
 	if (hasJsContent || hasSwiperImages) {
 		// DOM 预处理 / DOM preprocessing (ref: buildCleanWeChatDom)
-		const cleanedHtml = buildCleanWeChatDom(doc);
-		const cleanedDoc = parser.parseFromString(cleanedHtml, 'text/html');
+		const cleanedDoc = buildCleanWeChatDom(doc);
 		const parts: string[] = [];
 
 		let area1Meta: HtmlToMdResult | null = null;
@@ -521,7 +524,7 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 		// 区域 1: #js_content — 文字 + 类型 A 图片（先入队）
 		// Area 1: #js_content — text + Type A images (first in queue)
 		if (hasJsContent) {
-			area1Meta = convertHtmlToMarkdown(cleanedHtml, { url, contentSelector: '#js_content', doc: cleanedDoc });
+			area1Meta = convertHtmlToMarkdown(html, { url, contentSelector: '#js_content', doc: cleanedDoc });
 			if (area1Meta.content?.trim()) {
 				parts.push(area1Meta.content);
 			}
@@ -555,7 +558,7 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 			};
 
 			// 安全网：全页补充遗漏图片 / Safety net: supplement missed images
-			const imagesMarkdown = extractWeChatImages(html, doc, result.content);
+			const imagesMarkdown = extractWeChatImages(doc, result.content);
 			if (imagesMarkdown && result.content) {
 				result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
 			}
@@ -594,7 +597,7 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 
 	// 所有路径统一补充图片 + 去重 / Supplement images for ALL paths with dedup
 	const resultContent = result.content || '';
-	const imagesMarkdown = extractWeChatImages(html, doc, resultContent);
+	const imagesMarkdown = extractWeChatImages(doc, resultContent);
 	if (imagesMarkdown && resultContent) {
 		result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
 		// Tier 2 (og:description) 补到图后清除 fromMeta，避免 headless 冗余触发
