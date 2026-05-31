@@ -263,7 +263,15 @@ export class SyncManager {
 					for (const item of items) {
 						try {
 							if (existingMap.has(item.media_id)) continue;
-						const filePath = this.resolveFilePath(kbFolder, item.title, item.media_id);
+							const itemFolder = item.folderPath
+								? normalizePath(`${kbFolder}/${item.folderPath}`)
+								: kbFolder;
+							if (!itemFolder.startsWith(kbFolder + '/') && itemFolder !== kbFolder) {
+								console.warn(`ima.copilot Sync: blocked unsafe folder path: ${item.folderPath}`);
+								continue;
+							}
+							await ensureFolder(this.vault, itemFolder);
+							const filePath = this.resolveFilePath(itemFolder, item.title, item.media_id);
 							const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
 							if (content !== null) {
 								await this.writeNote(filePath, content, kbOpts);
