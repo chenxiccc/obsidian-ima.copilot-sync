@@ -95,6 +95,13 @@ export interface KnowledgeInfo {
 	parent_folder_id: string;
 	/** 媒体类型，11=笔记 / Media type, 11=note */
 	media_type: number;
+	folder_info?: {
+		folder_id: string;
+		name: string;
+		file_number?: string;
+		folder_number?: string;
+		parent_folder_id?: string;
+	} | null;
 }
 
 interface ListKnowledgeResponse {
@@ -278,16 +285,63 @@ export class ImaClient {
 	 * 分页拉取知识库中所有条目（仅文件，不含文件夹）
 	 * Fetch all items in a knowledge base (files only, not folders)
 	 */
-	async listAllKnowledgeItems(knowledgeBaseId: string): Promise<KnowledgeInfo[]> {
-		const items: KnowledgeInfo[] = [];
+	async listAllKnowledgeItems(knowledgeBaseId: string): Promise<Array<KnowledgeInfo & { folderPath: string }>> {
+		return this.listAllKnowledgeItemsRecursive(knowledgeBaseId, '', '');
+	}
+
+	private getKnowledgeFolderInfo(item: KnowledgeInfo): { folderId: string; name: string } | null {
+		if (item.folder_info?.folder_id) {
+			return {
+				folderId: item.folder_info.folder_id,
+				name: item.folder_info.name || item.title,
+			};
+		}
+
+		if (item.media_type !== 99 || !item.media_id.startsWith('folder_')) return null;
+
+		return {
+			folderId: item.media_id,
+			name: item.title,
+		};
+	}
+
+	private async listAllKnowledgeItemsRecursive(
+		knowledgeBaseId: string,
+		folderId: string,
+		folderPath: string,
+	): Promise<Array<KnowledgeInfo & { folderPath: string }>> {
+		const items: Array<KnowledgeInfo & { folderPath: string }> = [];
 		let cursor = '';
 
 		while (true) {
+			const body: {
+				knowledge_base_id: string;
+				folder_id?: string;
+				cursor: string;
+				limit: number;
+			} = { knowledge_base_id: knowledgeBaseId, cursor, limit: 50 };
+			if (folderId) body.folder_id = folderId;
+
 			const result = await this.post<ListKnowledgeResponse>(
 				'openapi/wiki/v1/get_knowledge_list',
-				{ knowledge_base_id: knowledgeBaseId, cursor, limit: 50 },
+				body,
 			);
-			items.push(...result.knowledge_list);
+			for (const item of result.knowledge_list) {
+				const folder = this.getKnowledgeFolderInfo(item);
+				if (folder) {
+					const subPath = folderPath
+						? `${folderPath}/${folder.name}`
+						: folder.name;
+					const subItems = await this.listAllKnowledgeItemsRecursive(
+						knowledgeBaseId,
+						folder.folderId,
+						subPath,
+					);
+					items.push(...subItems);
+				} else if (item.media_type !== 99) {
+					items.push({ ...item, folderPath });
+				}
+			}
 			if (result.is_end) break;
 			cursor = result.next_cursor;
 		}
