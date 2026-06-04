@@ -24,7 +24,7 @@
 		"typescript-eslint": "^8.60.0"
 	},
 	"dependencies": {
-		"defuddle": "^0.18.1",
+		"defuddle": "github:chenxiccc/defuddle#share-to-save",
 		"obsidian": "latest"
 	}
 }

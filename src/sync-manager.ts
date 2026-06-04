@@ -1,4 +1,4 @@
-import { App, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
+import { App, Platform, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
 import type { ImaPluginSettings } from './settings';
 import type { AttachmentOptions } from './path-utils';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
@@ -7,7 +7,7 @@ import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
 import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash } from './path-utils';
+import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash, classifyUrl } from './path-utils';
 import { HeadlessExtractor } from './headless-extractor';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
@@ -534,8 +534,27 @@ export class SyncManager {
 		return `${fmBase}---\n\n> 此条目为${typeLabel}，暂不支持自动同步内容。\n\n**标题**: ${item.title}`;
 	}
 
-	/** 生成友好的占位提示（统一文案）/ Build friendly placeholder text (unified copy) */
-	private buildFriendlyPlaceholder(title: string, url: string, mediaId: string): string {
+	/** 生成友好的占位提示（统一文案）/ Build friendly placeholder text (unified copy)
+	 * @param reason 'need-desktop' = 移动端或 downloadEnhanced 关闭；'headless-failed' = 桌面端 headless 也失败 */
+	private buildFriendlyPlaceholder(title: string, url: string, mediaId: string, reason?: 'need-desktop' | 'headless-failed'): string {
+		if (reason === 'need-desktop') {
+			return [
+				`---`,
+				`media_id: "${mediaId}"`,
+				`---`,
+				``,
+				`> [!warning] 此内容需要桌面端配合「下载增强」功能获取`,
+				`> `,
+				`> **建议操作**：`,
+				`> 1. 请切换到桌面端 Obsidian`,
+				`> 2. 删除此文件，使用本插件重新同步`,
+				`> 3. 确认已开启插件设置中的「下载增强」`,
+				``,
+				`**标题**: ${title}`,
+				``,
+				`**原文链接**: [${url}](${url})`,
+			].join('\n');
+		}
 		return [
 			`---`,
 			`media_id: "${mediaId}"`,
@@ -544,9 +563,10 @@ export class SyncManager {
 			`> [!warning] 由于目标网站限制，无法获取完整内容`,
 			`> `,
 			`> **建议操作**：`,
-			`> 1. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
-			`> 2. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
-			`> 3. 点击右上角菜单 → **「保存到仓库」**`,
+			`> 1. 确认已开启插件设置中的「下载增强」`,
+			`> 2. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
+			`> 3. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
+			`> 4. 点击右上角菜单 → **「保存到仓库」**`,
 			`> `,
 			`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`,
 			``,
@@ -756,11 +776,26 @@ export class SyncManager {
 	private async tryHeadlessExtraction(
 		url: string,
 		converter: (html: string, url: string) => HtmlToMdResult,
+		options?: { isWeChat?: boolean },
 	): Promise<{ html: string; result: HtmlToMdResult } | null> {
 		const renderedHtml = await this.headlessExtractor.extractRenderedHtml(url);
-		if (!renderedHtml || !HeadlessExtractor.hasWeChatContent(renderedHtml)) return null;
+		if (!renderedHtml) return null;
+
+		// 验证码检测 / Captcha detection
+		if (HeadlessExtractor.hasCaptcha(renderedHtml)) return null;
+
+		// 内容有效性检查：微信用 hasWeChatContent，通用用 hasValidContent
+		// Content validity check: WeChat uses hasWeChatContent, generic uses hasValidContent
+		if (options?.isWeChat) {
+			if (!HeadlessExtractor.hasWeChatContent(renderedHtml)) return null;
+			const headlessResult = converter(renderedHtml, url);
+			if (!headlessResult.content || headlessResult.fromMeta) return null;
+			return { html: renderedHtml, result: headlessResult };
+		}
+
+		if (!HeadlessExtractor.hasValidContent(renderedHtml)) return null;
 		const headlessResult = converter(renderedHtml, url);
-		if (!headlessResult.content || headlessResult.fromMeta) return null;
+		if (!headlessResult.content) return null;
 		return { html: renderedHtml, result: headlessResult };
 	}
 
@@ -785,10 +820,24 @@ export class SyncManager {
 			// WeChat + downloadEnhanced: skip Node.js, go straight to headless (WeChat is Vue SPA, Node.js gets empty shell)
 			// 参考 Share to Save: downloader.ts:69-71, 293-295
 			const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
-			if (wechatConverter && isWeChatPage && this.settings.downloadEnhanced) {
-				headlessTried = true;
+			const siteClass = classifyUrl(url);
+			// 知乎 + downloadEnhanced：跳过 requestUrl/Node.js，直接 headless（知乎反爬严格，HTTP 请求必然失败）
+			// Zhihu + downloadEnhanced: skip requestUrl/Node.js, go straight to headless (Zhihu anti-bot is strict, HTTP requests always fail)
+			if (siteClass === 'zhihu' && this.settings.downloadEnhanced) {
+				const zhihuHtml = await this.headlessExtractor.extractRenderedHtml(url);
+				if (zhihuHtml && HeadlessExtractor.hasValidContent(zhihuHtml) && !HeadlessExtractor.hasCaptcha(zhihuHtml)) {
+					headlessTried = true;
+					html = zhihuHtml;
+				} else {
+					// headless 失败时给占位符，不浪费时间去试 requestUrl
+					// When headless fails, use placeholder directly instead of wasting time on requestUrl
+					return this.buildFriendlyPlaceholder(title, url, mediaId,
+						this.settings.downloadEnhanced ? 'headless-failed' : 'need-desktop');
+				}
+			} else if (wechatConverter && isWeChatPage && this.settings.downloadEnhanced) {
 				const headlessHtml = await this.headlessExtractor.extractRenderedHtml(url);
 				if (headlessHtml && HeadlessExtractor.hasWeChatContent(headlessHtml)) {
+					headlessTried = true;
 					html = headlessHtml;
 					// 直接跳到转换阶段，跳过后续的 headless 回退
 					// Skip to conversion phase, bypass subsequent headless fallback
@@ -842,6 +891,28 @@ export class SyncManager {
 					html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 				}
 
+				// 非微信 URL：若获取的 HTML 疑似反爬页或内容过短，尝试 headless 兜底
+				// Non-WeChat URL: if HTML looks like anti-bot or too short, try headless fallback
+				if (!isWeChatPage && this.settings.downloadEnhanced && !headlessTried) {
+					const htmlTooShort = html && html.trim().length < 500;
+					const looksLikeAntiBot = html && (
+						html.includes('验证') || html.includes('captcha') ||
+						html.includes('请开启JavaScript') || html.includes('请打开JavaScript')
+					);
+					if (htmlTooShort || looksLikeAntiBot) {
+						try {
+							const headlessHtml = await this.headlessExtractor.extractRenderedHtml(url);
+							if (headlessHtml && HeadlessExtractor.hasValidContent(headlessHtml) && !HeadlessExtractor.hasCaptcha(headlessHtml)) {
+								html = headlessHtml;
+								headlessTried = true;
+								console.debug(`ima.copilot Sync: Headless extraction succeeded for non-WeChat URL: ${url}`);
+							}
+						} catch (headlessErr) {
+							console.warn(`ima.copilot Sync: Headless extraction failed for: ${url}`, headlessErr);
+						}
+					}
+				}
+
 			}
 			const result = wechatConverter
 				? wechatConverter(html, url)
@@ -869,7 +940,7 @@ export class SyncManager {
 		if (!headlessTried && wechatConverter && isWeChatPage && (result.fromMeta || !HeadlessExtractor.hasWeChatContent(html) || contentTooShort || hasOrphanImages || looksLikeJsPage)) {
 				let headlessSucceeded = false;
 				if (this.settings.downloadEnhanced) {
-					const headless = await this.tryHeadlessExtraction(url, wechatConverter);
+					const headless = await this.tryHeadlessExtraction(url, wechatConverter, { isWeChat: true });
 					if (headless) {
 						html = headless.html;
 						result.content = headless.result.content;
@@ -911,9 +982,12 @@ export class SyncManager {
 				console.warn(`ima.copilot Sync: All static extraction failed for "${title}": ${msg}`);
 
 				// 尝试 headless 作为最后手段（如果尚未尝试）/ Attempt headless as last resort (if not already tried)
+				// 微信用专用 converter，通用网页用通用 converter / WeChat uses dedicated converter, generic pages use generic
 				if (this.settings.downloadEnhanced && !headlessTried) {
 					try {
-						const headless = await this.tryHeadlessExtraction(url, convertWeChatHtmlToMarkdown);
+						const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
+						const lastConverterWrapper = (h: string, u: string) => isWeChatPage ? convertWeChatHtmlToMarkdown(h, u) : convertHtmlToMarkdown(h, { url: u });
+						const headless = await this.tryHeadlessExtraction(url, lastConverterWrapper, { isWeChat: isWeChatPage });
 						if (headless) {
 							const frontmatter = this.buildWebFrontmatter(url, headless.result.author, headless.result.published, mediaId);
 							const hdParts: string[] = [frontmatter];
@@ -929,7 +1003,8 @@ export class SyncManager {
 					}
 				}
 
-				return this.buildFriendlyPlaceholder(title, url, mediaId);
+				return this.buildFriendlyPlaceholder(title, url, mediaId,
+				(Platform.isDesktop && this.settings.downloadEnhanced) ? 'headless-failed' : 'need-desktop');
 			}
 	}
 

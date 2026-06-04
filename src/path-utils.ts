@@ -303,3 +303,26 @@ export function isDownloadableFileUrl(url: string): boolean {
 	const ext = extractExtFromUrl(url) || guessFileExtension(url);
 	return ext !== '' && DOWNLOADABLE_FILE_EXTENSIONS.has(ext);
 }
+
+// ─── 站点检测 / Site detection ──────────────────────────────────────────────────
+
+/** 检测是否为小红书页面 / Check if it's a Xiaohongshu page */
+export function isXiaohongshuUrl(url: string): boolean {
+	return /(?:xiaohongshu\.com|xhslink\.com)/.test(url);
+}
+
+/** 检测是否为知乎页面（专栏/问答/想法/回答）/ Check if it's a Zhihu page (column/Q&A/pin/answer) */
+export function isZhihuUrl(url: string): boolean {
+	return /zhihu\.com\/(question|zhuanlan|pin|answer)/.test(url);
+}
+
+/** 内容获取策略站点分类 / Content acquisition strategy site classification */
+export type SiteClass = 'wechat' | 'xhs' | 'zhihu' | 'generic';
+
+/** 根据 URL 分类站点类型 / Classify site type by URL */
+export function classifyUrl(url: string): SiteClass {
+	if (/mp\.weixin\.qq\.com/.test(url)) return 'wechat';
+	if (isXiaohongshuUrl(url)) return 'xhs';
+	if (isZhihuUrl(url)) return 'zhihu';
+	return 'generic';
+}

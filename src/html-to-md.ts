@@ -645,12 +645,9 @@ function extractSwiperAreaImages(doc: Document): string {
 
 // ─── 小红书文章提取 / Xiaohongshu article extraction ─────────────────────────
 
-/**
- * 检测是否为小红书页面 / Check if it's a Xiaohongshu page
- */
-export function isXiaohongshuUrl(url: string): boolean {
-	return /(?:xiaohongshu\.com|xhslink\.com)/.test(url);
-}
+// isXiaohongshuUrl 已移至 path-utils.ts 统一管理，此处重新导出以保持向后兼容
+// isXiaohongshuUrl moved to path-utils.ts for unified site detection, re-export for backward compat
+export { isXiaohongshuUrl } from './path-utils';
 
 /**
  * 从小红书 __INITIAL_STATE__ JSON 提取图片 URL

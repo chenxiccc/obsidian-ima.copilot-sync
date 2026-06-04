@@ -1,6 +1,5 @@
 import { Platform } from 'obsidian';
 import { CHROME_UA } from './path-utils';
-import { WECHAT_CONTENT_SELECTORS } from './html-to-md';
 
 // electron 已由 esbuild external，运行时由 Obsidian Electron 环境解析 / electron is external in esbuild, resolved by Obsidian's Electron runtime
 
@@ -8,6 +7,7 @@ const LOAD_TIMEOUT_MS = 20_000;
 const CONTENT_POLL_INTERVAL_MS = 500;
 const CONTENT_POLL_MAX_MS = 10_000;
 const WECHAT_PARTITION = 'persist:ima-copilot-wechat';
+const GENERIC_PARTITION = 'persist:ima-copilot';
 
 /**
  * 使用隐藏 Electron BrowserWindow 提取 JS 渲染后的页面 HTML
@@ -44,8 +44,8 @@ export class HeadlessExtractor {
 			// 创建隐藏 BrowserWindow，参考 weread-plugin 模式
 			// Create hidden BrowserWindow, following weread-plugin pattern
 			win = new RemoteBrowserWindow({
-				width: 1,
-				height: 1,
+				width: 1280,
+				height: 720,
 				show: false,
 				webPreferences: {
 					partition: WECHAT_PARTITION,
@@ -78,24 +78,62 @@ export class HeadlessExtractor {
 	 * Check if extracted HTML contains valid WeChat article content
 	 */
 	static hasWeChatContent(html: string): boolean {
-		for (const sel of WECHAT_CONTENT_SELECTORS) {
-			// 简单检查选择器中的关键标识是否出现在 HTML 中
-			// Simple check if the selector's key identifier appears in HTML
-			const key = sel.replace(/^[#.]/, '');
-			if (html.includes(key)) {
-				return true;
-			}
-		}
-		return false;
+		// 微信公众号已知内容容器选择器 / Known WeChat content container selectors
+		const selectors = [
+			'js_content', 'rich_media_content', 'share_content_page',
+			'js_video_page_title', 'js_audio_title', 'audio_panel_area',
+			'js_text_title', 'js_novel_card', 'img-content', 'rich_media',
+		];
+		return selectors.some(sel => html.includes(sel));
 	}
 
 	/**
-	 * 检测 HTML 是否为微信验证码/反爬拦截页（参考 Share to Save headless-extractor.ts:147-150）
-	 * Check if HTML is a WeChat captcha/anti-crawl block page (ref: Share to Save headless-extractor.ts:147-150)
+	 * 判断提取的 HTML 是否包含有效页面正文（通用检查，不依赖站点特定选择器）
+	 * Check if extracted HTML contains valid page body content (generic check, no site-specific selectors)
+	 */
+	static hasValidContent(html: string): boolean {
+		const parser = new DOMParser();
+		const doc = parser.parseFromString(html, 'text/html');
+		const bodyText = (doc.body?.textContent || '').trim();
+		return bodyText.length > 100;
+	}
+
+	/**
+	 * 多信号验证码检测：服务签名 → 页面标题 → 关键词（参考 Share to Save headless-extractor.ts:148-179）
+	 * Multi-signal captcha detection: service signatures → page title → keywords (ref: Share to Save headless-extractor.ts:148-179)
+	 *
+	 * 服务签名：各验证码厂商注入的唯一 DOM 标记，误报率为零 / Service signatures: unique DOM markers, zero false positives
+	 * 页面标题：验证码页面标题高度固定，正常文章不会匹配 / Page title: captcha titles are formulaic, articles won't match
+	 * 关键词：覆盖中英文常见验证码提示语，作为最终安全网 / Keywords: cover common CN/EN captcha prompts, final safety net
 	 */
 	static hasCaptcha(html: string): boolean {
-		const indicators = ['js_verify', 'verify_container', '环境异常', '请完成安全验证', '操作频繁'];
-		return indicators.some(ind => html.includes(ind));
+		// Signal 1: 已知验证码服务签名（语言无关，零误报）/ Known captcha service signatures (language-independent, zero false positives)
+		const serviceSignatures = [
+			'cf-browser-verification',   // Cloudflare
+			'cf-challenge-running',      // Cloudflare
+			'datadome',                   // DataDome
+			'akamai-bot-manager',        // Akamai
+			'_abck',                      // Akamai cookie
+		];
+		if (serviceSignatures.some(s => html.includes(s))) return true;
+
+		// Signal 2: 页面标题检测（公式化表达，误报风险极低）/ Page title detection (formulaic, very low false positive risk)
+		const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+		const title = titleMatch?.[1]?.trim() || '';
+		const captchaTitles = [
+			'just a moment', 'attention required', 'security check',
+			'verify you are a human', 'are you a robot',
+			'请完成安全验证', '环境异常', '人机验证',
+		];
+		if (captchaTitles.some(t => title.toLowerCase().includes(t))) return true;
+
+		// Signal 3: 关键词匹配（中英文覆盖，作为最终安全网）/ Keyword matching (CN/EN coverage, final safety net)
+		const keywords = [
+			'js_verify', 'verify_container',
+			'环境异常', '请完成安全验证', '操作频繁',
+			'please verify you are a human', 'unusual traffic',
+		];
+		return keywords.some(k => html.includes(k));
 	}
 
 	/**
@@ -135,41 +173,31 @@ export class HeadlessExtractor {
 	}
 
 	/**
-	 * 轮询多种内容容器出现后提取 outerHTML
-	 * Poll for any known content container then extract outerHTML
+	 * 轮询页面正文出现后提取 outerHTML（通用检测，不依赖站点特定选择器）
+	 * Poll for page body content then extract outerHTML (generic detection, no site-specific selectors)
 	 */
 	private async waitForContentAndExtract(win: any): Promise<string | null> {
 		const start = Date.now();
 
 		while (Date.now() - start < CONTENT_POLL_MAX_MS) {
 			try {
-				const hasContent: boolean = await win.webContents.executeJavaScript(
-					`(function() {
-						var selectors = ${JSON.stringify(WECHAT_CONTENT_SELECTORS)};
-						for (var i = 0; i < selectors.length; i++) {
-							var el = document.querySelector(selectors[i]);
-							if (!el) continue;
-							var textLen = (el.textContent || '').trim().length;
-							var imgCount = el.querySelectorAll('img').length;
-							// 有足够文本或多张图片 / Has enough text or multiple images
-							if (textLen > 30 || imgCount >= 2) return true;
-						}
-						return false;
-					})()`,
+				const bodyLen: number = await win.webContents.executeJavaScript(
+					'(document.body?.innerText || "").trim().length',
 				);
-				if (hasContent) break;
+				if (bodyLen > 100) break;
 			} catch {
 				// executeJavaScript 在页面未就绪时可能抛异常 / executeJavaScript may throw if page isn't ready
 			}
 			await new Promise(r => window.setTimeout(r, CONTENT_POLL_INTERVAL_MS));
 		}
 
-		// 触发基础懒加载：快速滚动触发图片 data-src 填充（参考 Share to Save headless-extractor.ts:222-225）
-		// Trigger basic lazy load: quick scroll triggers image data-src fill (ref: Share to Save headless-extractor.ts:222-225)
+		// 触发懒加载：滚到底部触发图片 data-src 填充（参考 Share to Save headless-extractor.ts:448-461）
+		// Trigger lazy load: scroll to bottom to trigger image data-src fill (ref: Share to Save headless-extractor.ts:448-461)
 		try {
 			await win.webContents.executeJavaScript('window.scrollTo(0, document.body.scrollHeight)');
-			await new Promise(r => window.setTimeout(r, 300));
+			await new Promise(r => window.setTimeout(r, 800));
 			await win.webContents.executeJavaScript('window.scrollTo(0, 0)');
+			await new Promise(r => window.setTimeout(r, 500));
 		} catch {
 			// 滚动失败不影响提取 / Scroll failure doesn't block extraction
 		}
@@ -183,7 +211,6 @@ export class HeadlessExtractor {
 			return null;
 		}
 	}
-
 	/**
 	 * 销毁 BrowserWindow / Destroy BrowserWindow
 	 */
