@@ -149,16 +149,13 @@ export class SyncManager {
 		await this.vault.adapter.rename(old, neu);
 	}
 
-	private buildAttachmentOptions(kbName?: string, kbCategory?: string): AttachmentOptions {
+	private buildAttachmentOptions(): AttachmentOptions {
 		return {
 			linkFormat: this.settings.linkFormat,
-			syncFolder: normalizePath(this.settings.syncFolder),
 			downloadImages: this.settings.downloadImages,
 			imageSizeLimitBytes: this.calcSizeLimitBytes(this.settings.imageSizeLimit, this.settings.imageSizeLimitUnit),
 			downloadFiles: this.settings.downloadFiles,
 			fileSizeLimitBytes: this.calcSizeLimitBytes(this.settings.fileSizeLimit, this.settings.fileSizeLimitUnit),
-			kbName,
-			kbCategory,
 			antiHotlinkEnhanced: this.settings.downloadEnhanced,
 		};
 	}
@@ -239,7 +236,7 @@ export class SyncManager {
 				if (!kbId) continue;
 				try {
 					const kbName = pkb.name;
-					const kbOpts = this.buildAttachmentOptions(kbName || undefined, '个人知识库');
+					const kbOpts = this.buildAttachmentOptions();
 					const kbFolder = normalizePath(`${syncFolder}/个人知识库/${sanitizeFilename(kbName || kbId)}`);
 					await ensureFolder(this.vault, kbFolder);
 
@@ -297,7 +294,7 @@ export class SyncManager {
 		if (this.settings.publicKnowledgeBases.length > 0) {
 			for (const pubKB of this.settings.publicKnowledgeBases) {
 				try {
-					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions(pubKB.name || undefined, pubKB.kbCategory || '订阅和公共知识库'));
+					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions());
 					syncedCount += count;
 				} catch (err) {
 					console.warn(`ima.copilot Sync: 公共知识库 "${pubKB.name}" 同步失败`, err);
@@ -537,38 +534,32 @@ export class SyncManager {
 	/** 生成友好的占位提示（统一文案）/ Build friendly placeholder text (unified copy)
 	 * @param reason 'need-desktop' = 移动端或 downloadEnhanced 关闭；'headless-failed' = 桌面端 headless 也失败 */
 	private buildFriendlyPlaceholder(title: string, url: string, mediaId: string, reason?: 'need-desktop' | 'headless-failed'): string {
-		if (reason === 'need-desktop') {
-			return [
-				`---`,
-				`media_id: "${mediaId}"`,
-				`---`,
-				``,
+		const messageLines = reason === 'need-desktop'
+			? [
 				`> [!warning] 此内容需要桌面端配合「下载增强」功能获取`,
 				`> `,
 				`> **建议操作**：`,
 				`> 1. 请切换到桌面端 Obsidian`,
 				`> 2. 删除此文件，使用本插件重新同步`,
 				`> 3. 确认已开启插件设置中的「下载增强」`,
-				``,
-				`**标题**: ${title}`,
-				``,
-				`**原文链接**: [${url}](${url})`,
-			].join('\n');
-		}
+			]
+			: [
+				`> [!warning] 由于目标网站限制，无法获取完整内容`,
+				`> `,
+				`> **建议操作**：`,
+				`> 1. 确认已开启插件设置中的「下载增强」`,
+				`> 2. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
+				`> 3. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
+				`> 4. 点击右上角菜单 → **「保存到仓库」**`,
+				`> `,
+				`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`,
+			];
 		return [
 			`---`,
 			`media_id: "${mediaId}"`,
 			`---`,
 			``,
-			`> [!warning] 由于目标网站限制，无法获取完整内容`,
-			`> `,
-			`> **建议操作**：`,
-			`> 1. 确认已开启插件设置中的「下载增强」`,
-			`> 2. 确保已开启 Obsidian 设置 → 核心插件 → **网页浏览器**`,
-			`> 3. 点击 [原文链接](${url})，在 Obsidian 内置浏览器中打开`,
-			`> 4. 点击右上角菜单 → **「保存到仓库」**`,
-			`> `,
-			`> 也可以使用浏览器扩展 [Web Clipper](https://obsidian.md/clipper) 保存`,
+			...messageLines,
 			``,
 			`**标题**: ${title}`,
 			``,
@@ -786,16 +777,16 @@ export class SyncManager {
 
 		// 内容有效性检查：微信用 hasWeChatContent，通用用 hasValidContent
 		// Content validity check: WeChat uses hasWeChatContent, generic uses hasValidContent
-		if (options?.isWeChat) {
-			if (!HeadlessExtractor.hasWeChatContent(renderedHtml)) return null;
-			const headlessResult = converter(renderedHtml, url);
-			if (!headlessResult.content || headlessResult.fromMeta) return null;
-			return { html: renderedHtml, result: headlessResult };
-		}
+		const hasContent = options?.isWeChat
+			? HeadlessExtractor.hasWeChatContent(renderedHtml)
+			: HeadlessExtractor.hasValidContent(renderedHtml);
+		if (!hasContent) return null;
 
-		if (!HeadlessExtractor.hasValidContent(renderedHtml)) return null;
 		const headlessResult = converter(renderedHtml, url);
 		if (!headlessResult.content) return null;
+		// 微信 meta 提取（Tier 3 回退）内容质量不可靠，拒绝 / WeChat meta-extracted content (Tier 3) is unreliable, reject
+		if (options?.isWeChat && headlessResult.fromMeta) return null;
+
 		return { html: renderedHtml, result: headlessResult };
 	}
 
@@ -807,6 +798,8 @@ export class SyncManager {
 		wechatConverter?: (html: string, url: string) => HtmlToMdResult,
 	): Promise<string> {
 		let headlessTried = false;
+		const siteClass = classifyUrl(url);
+		const isWeChatPage = siteClass === 'wechat';
 		try {
 			// 构建基础请求头（requestUrl 不支持自定义 UA/Referer，会被 Chromium 安全策略剥离）
 			// Build base headers (requestUrl cannot send custom UA/Referer — stripped by Chromium security policy)
@@ -819,8 +812,6 @@ export class SyncManager {
 			// 微信 + downloadEnhanced：跳过 Node.js，直接 headless（微信是 Vue SPA，Node.js 拿到的是空壳）
 			// WeChat + downloadEnhanced: skip Node.js, go straight to headless (WeChat is Vue SPA, Node.js gets empty shell)
 			// 参考 Share to Save: downloader.ts:69-71, 293-295
-			const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
-			const siteClass = classifyUrl(url);
 			// 知乎 + downloadEnhanced：跳过 requestUrl/Node.js，直接 headless（知乎反爬严格，HTTP 请求必然失败）
 			// Zhihu + downloadEnhanced: skip requestUrl/Node.js, go straight to headless (Zhihu anti-bot is strict, HTTP requests always fail)
 			if (siteClass === 'zhihu' && this.settings.downloadEnhanced) {
@@ -894,11 +885,9 @@ export class SyncManager {
 				// 非微信 URL：若获取的 HTML 疑似反爬页或内容过短，尝试 headless 兜底
 				// Non-WeChat URL: if HTML looks like anti-bot or too short, try headless fallback
 				if (!isWeChatPage && this.settings.downloadEnhanced && !headlessTried) {
-					const htmlTooShort = html && html.trim().length < 500;
-					const looksLikeAntiBot = html && (
-						html.includes('验证') || html.includes('captcha') ||
-						html.includes('请开启JavaScript') || html.includes('请打开JavaScript')
-					);
+					const htmlTooShort = html.trim().length < 500;
+					const looksLikeAntiBot = HeadlessExtractor.hasCaptcha(html) ||
+						html.includes('请开启JavaScript') || html.includes('请打开JavaScript');
 					if (htmlTooShort || looksLikeAntiBot) {
 						try {
 							const headlessHtml = await this.headlessExtractor.extractRenderedHtml(url);
@@ -985,9 +974,8 @@ export class SyncManager {
 				// 微信用专用 converter，通用网页用通用 converter / WeChat uses dedicated converter, generic pages use generic
 				if (this.settings.downloadEnhanced && !headlessTried) {
 					try {
-						const isWeChatPage = /mp\.weixin\.qq\.com/.test(url);
-						const lastConverterWrapper = (h: string, u: string) => isWeChatPage ? convertWeChatHtmlToMarkdown(h, u) : convertHtmlToMarkdown(h, { url: u });
-						const headless = await this.tryHeadlessExtraction(url, lastConverterWrapper, { isWeChat: isWeChatPage });
+						const catchConverter = isWeChatPage ? convertWeChatHtmlToMarkdown : (h: string, u: string) => convertHtmlToMarkdown(h, u);
+						const headless = await this.tryHeadlessExtraction(url, catchConverter, { isWeChat: isWeChatPage });
 						if (headless) {
 							const frontmatter = this.buildWebFrontmatter(url, headless.result.author, headless.result.published, mediaId);
 							const hdParts: string[] = [frontmatter];
@@ -1184,10 +1172,6 @@ export class SyncManager {
 				const content = await this.vault.read(file);
 				if (!content.match(/!\[[^\]]*\]\(https?:\/\//)) continue;
 
-				// 按文件所在路径推断知识库分类/名称，确保图片存入正确附件子目录
-				// Infer KB category/name from file path so images land in the correct attachment subdirectory
-				const fileOpts = this.inferOptsFromFilePath(file.path, opts);
-
 				// 若笔记有 docid 且认证客户端可用，重新拉 Markdown 获取新鲜图片 URL（避免 COS 临时链接过期）
 				// If note has docid and auth client is available, re-fetch Markdown for fresh image URLs (avoids expired COS signed URLs)
 				const cache = this.app.metadataCache.getFileCache(file);
@@ -1197,14 +1181,14 @@ export class SyncManager {
 				if (typeof docid === 'string' && this.client) {
 					try {
 						const freshMd = await this.client.getNoteContentMarkdown(docid);
-						const withImages = await this.imageHandler.processContent(freshMd, file.path, fileOpts, file.basename);
+						const withImages = await this.imageHandler.processContent(freshMd, file.path, opts, file.basename);
 						fixed = `---\ndocid: "${docid}"\n---\n\n${withImages}`;
 					} catch (err) {
 						console.warn(`ima.copilot Sync: 重新获取笔记内容失败，降级修复现有外链 / Re-fetch failed, falling back for ${file.path}:`, err);
 					}
 				}
 				if (fixed === content) {
-					fixed = await this.imageHandler.processContent(content, file.path, fileOpts, file.basename);
+					fixed = await this.imageHandler.processContent(content, file.path, opts, file.basename);
 				}
 
 				if (fixed !== content) {
@@ -1216,27 +1200,6 @@ export class SyncManager {
 		}
 	}
 
-	/**
-	 * 根据文件路径推断其所属知识库分类和名称，返回含正确 kbCategory/kbName 的 opts
-	 * 路径规则：{syncFolder}/{kbCategory}/{kbName}/xxx.md → kbCategory, kbName
-	 * Infer KB category and name from file path, return opts with correct kbCategory/kbName
-	 * Path rule: {syncFolder}/{kbCategory}/{kbName}/xxx.md → kbCategory, kbName
-	 */
-	private inferOptsFromFilePath(filePath: string, baseOpts: AttachmentOptions): AttachmentOptions {
-		const syncFolder = normalizePath(this.settings.syncFolder);
-		const prefix = syncFolder + '/';
-		if (!filePath.startsWith(prefix)) return baseOpts;
-
-		const relative = filePath.slice(prefix.length);
-		const parts = relative.split('/');
-		// 根目录笔记（单段）或二级目录（知识库直接根目录文件）均无 kbName
-		// Root notes (1 segment) or files directly in category dir (2 segments) have no kbName
-		if (parts.length < 3) return baseOpts;
-
-		const kbCategory = parts[0];
-		const kbName = parts[1];
-		return { ...baseOpts, kbCategory, kbName };
-	}
 
 	/**
 	 * 写入或更新笔记文件，更新后清理孤儿图片

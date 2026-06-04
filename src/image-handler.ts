@@ -35,8 +35,8 @@ export class ImageHandler {
 	 * 根据模式解析附件文件夹的实际路径
 	 * Resolve the actual attachment folder path based on mode
 	 */
-	resolveAttachmentFolder(noteFilePath: string, opts: AttachmentOptions): string {
-		return resolveAttachmentFolder(opts);
+	resolveAttachmentFolder(noteFilePath: string): string {
+		return resolveAttachmentFolder(noteFilePath);
 	}
 
 	/**
@@ -78,7 +78,7 @@ export class ImageHandler {
 
 		if (matches.length === 0) return content;
 
-		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
+		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath);
 		await ensureFolder(this.vault, attachmentFolder);
 
 		const naming = createNamingContext(titleBase);
@@ -171,7 +171,7 @@ export class ImageHandler {
 	extractLocalImagePaths(content: string, noteFilePath: string, opts: AttachmentOptions): string[] {
 		const paths: string[] = [];
 
-		const folder = this.resolveAttachmentFolder(noteFilePath, opts);
+		const folder = this.resolveAttachmentFolder(noteFilePath);
 		const wikilinkRegex = /!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
 		let m: RegExpExecArray | null;
 		while ((m = wikilinkRegex.exec(content)) !== null) {
@@ -200,7 +200,7 @@ export class ImageHandler {
 	 */
 	extractLocalFilePaths(content: string, noteFilePath: string, opts: AttachmentOptions): string[] {
 		const paths: string[] = [];
-		const folder = this.resolveAttachmentFolder(noteFilePath, opts);
+		const folder = this.resolveAttachmentFolder(noteFilePath);
 
 		// 解析 wikilink 格式：[[file.docx]]（非嵌入）/ Parse wikilink format: [[file.docx]] (non-embed)
 		const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
@@ -238,7 +238,7 @@ export class ImageHandler {
 	async downloadAndLink(url: string, noteFilePath: string, opts: AttachmentOptions, naming?: ImageNamingContext): Promise<string> {
 		if (!opts.downloadImages) return `![image](${url})`;
 
-		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath, opts);
+		const attachmentFolder = this.resolveAttachmentFolder(noteFilePath);
 		await ensureFolder(this.vault, attachmentFolder);
 
 		const ctx = naming ?? createNamingContext();

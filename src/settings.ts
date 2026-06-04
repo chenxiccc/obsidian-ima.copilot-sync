@@ -387,7 +387,7 @@ export class ImaSettingTab extends PluginSettingTab {
 							const syncFolder = this.plugin.settings.syncFolder;
 							const safeName = sanitizeFilename(base.kb_name);
 							const kbFolder = normalizePath(`${syncFolder}/个人知识库/${safeName}`);
-							const attachFolder = normalizePath(`${syncFolder}/attachments/个人知识库/${safeName}`);
+							const attachFolder = normalizePath(`${syncFolder}/个人知识库/${safeName}/attachments`);
 							await this.plugin.deleteKbFolder(kbFolder, attachFolder);
 						}
 						this.plugin.settings.personalKnowledgeBases =
@@ -451,7 +451,7 @@ export class ImaSettingTab extends PluginSettingTab {
 							const syncFolder = this.plugin.settings.syncFolder;
 							const safeName = sanitizeFilename(base.kb_name);
 							const kbFolder = normalizePath(`${syncFolder}/订阅和公共知识库/${safeName}`);
-							const attachFolder = normalizePath(`${syncFolder}/attachments/订阅和公共知识库/${safeName}`);
+							const attachFolder = normalizePath(`${syncFolder}/订阅和公共知识库/${safeName}/attachments`);
 							await this.plugin.deleteKbFolder(kbFolder, attachFolder);
 						}
 						this.plugin.settings.publicKnowledgeBases =
@@ -627,7 +627,7 @@ export class ImaSettingTab extends PluginSettingTab {
 							const category = sanitizeFilename(base.kbCategory ?? '订阅和公共知识库');
 							const safeName = sanitizeFilename(base.name);
 							const kbFolder = normalizePath(`${syncFolder}/${category}/${safeName}`);
-							const attachFolder = normalizePath(`${syncFolder}/attachments/${category}/${safeName}`);
+							const attachFolder = normalizePath(`${syncFolder}/${category}/${safeName}/attachments`);
 							await this.plugin.deleteKbFolder(kbFolder, attachFolder);
 						}
 						this.plugin.settings.publicKnowledgeBases =

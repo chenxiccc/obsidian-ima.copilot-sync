@@ -58,7 +58,7 @@ export class FileDownloader {
 			}
 		}
 
-		const attachmentFolder = resolveAttachmentFolder(opts);
+		const attachmentFolder = resolveAttachmentFolder(noteFilePath);
 		await ensureFolder(this.vault, attachmentFolder);
 
 		const sanitized = sanitizeFilename(filename);

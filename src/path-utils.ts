@@ -5,13 +5,6 @@ import { Vault, normalizePath, requestUrl } from 'obsidian';
 /** 链接格式 / Link format */
 export type LinkFormat = 'auto' | 'wikilink' | 'markdown';
 
-/** 附件存储路径配置 / Attachment storage path config */
-export interface AttachmentPathConfig {
-	syncFolder: string;
-	kbName?: string;
-	kbCategory?: string;
-}
-
 /** 下载开关与限制 / Download toggles and limits */
 export interface DownloadConfig {
 	downloadImages: boolean;
@@ -21,8 +14,8 @@ export interface DownloadConfig {
 	antiHotlinkEnhanced: boolean;
 }
 
-/** 附件选项（组合类型）/ Attachment options (composite) */
-export interface AttachmentOptions extends AttachmentPathConfig, DownloadConfig {
+/** 附件选项 / Attachment options */
+export interface AttachmentOptions extends DownloadConfig {
 	linkFormat: LinkFormat;
 }
 
@@ -63,18 +56,12 @@ export function extractNoteDir(noteFilePath: string): string {
 }
 
 /**
- * 解析附件文件夹路径：syncFolder/attachments/{kbCategory}/{kbName}
- * Resolve attachment folder path: syncFolder/attachments/{kbCategory}/{kbName}
+ * 解析附件文件夹路径：笔记所在目录/attachments
+ * Resolve attachment folder path: note directory/attachments
  */
-export function resolveAttachmentFolder(opts: AttachmentOptions): string {
-	const base = normalizePath(`${opts.syncFolder}/attachments`);
-	if (opts.kbCategory && opts.kbName) {
-		return normalizePath(`${base}/${sanitizeFilename(opts.kbCategory)}/${sanitizeFilename(opts.kbName)}`);
-	}
-	if (opts.kbName) {
-		return normalizePath(`${base}/${sanitizeFilename(opts.kbName)}`);
-	}
-	return base;
+export function resolveAttachmentFolder(noteFilePath: string): string {
+	const dir = extractNoteDir(noteFilePath);
+	return normalizePath(dir ? `${dir}/attachments` : 'attachments');
 }
 
 /**

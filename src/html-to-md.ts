@@ -24,15 +24,16 @@ export interface HtmlToMdResult {
  */
 export function convertHtmlToMarkdown(
 	html: string,
-	options?: {
+	optionsOrUrl?: {
 		/** 页面 URL，用于解析相对链接 / Page URL for resolving relative links */
 		url?: string;
 		/** 强制正文选择器，如微信文章用 '#js_content' / Force content selector, e.g. '#js_content' for WeChat */
 		contentSelector?: string;
 		/** 预解析的 Document（避免重复 parseFromString）/ Pre-parsed Document (avoids duplicate parseFromString) */
 		doc?: Document;
-	},
+	} | string,  // 兼容简化调用 convertHtmlToMarkdown(html, url) / Compatible with simple call convertHtmlToMarkdown(html, url)
 ): HtmlToMdResult {
+	const options = typeof optionsOrUrl === 'string' ? { url: optionsOrUrl } : optionsOrUrl;
 	const doc = options?.doc ?? (() => {
 		const parser = new DOMParser();
 		return parser.parseFromString(html, 'text/html');

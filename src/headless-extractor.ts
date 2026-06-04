@@ -7,7 +7,6 @@ const LOAD_TIMEOUT_MS = 20_000;
 const CONTENT_POLL_INTERVAL_MS = 500;
 const CONTENT_POLL_MAX_MS = 10_000;
 const WECHAT_PARTITION = 'persist:ima-copilot-wechat';
-const GENERIC_PARTITION = 'persist:ima-copilot';
 
 /**
  * 使用隐藏 Electron BrowserWindow 提取 JS 渲染后的页面 HTML
