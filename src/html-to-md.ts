@@ -16,6 +16,49 @@ export interface HtmlToMdResult {
 }
 
 /**
+ * 将子元素移出并删除包装元素 / Move children out of wrapper and remove it
+ * 等价于 defuddle 内部的 unwrapElement() / Equivalent to defuddle's internal unwrapElement()
+ */
+function unwrapElement(el: Element): void {
+	const parent = el.parentNode;
+	if (!parent) return;
+	while (el.firstChild) {
+		parent.insertBefore(el.firstChild, el);
+	}
+	parent.removeChild(el);
+}
+
+/**
+ * 将 <a> 内块级子元素（<p>, <div>）展开为行内内容
+ * Unwrap block-level children (<p>, <div>) inside <a> tags
+ *
+ * 修复从私有 defuddle fork (commit e54120c) 迁移为本地预处理。
+ * 避免 Turndown 对 <a><p>text</p></a> 生成 [\\n\\ntext\\n\\n](url) 断裂 Markdown。
+ * Fix ported from private defuddle fork — prevents broken multiline Markdown links.
+ *
+ * <a href="/x"><p>text</p></a> → <a href="/x">text</a>
+ */
+function unwrapBlockChildrenInLinks(doc: Document): void {
+	doc.querySelectorAll('a').forEach(link => {
+		const href = link.getAttribute('href');
+		if (!href || href.startsWith('#')) return;
+
+		const blockChildren = Array.from(link.children).filter(c => {
+			const tag = c.nodeName.toLowerCase();
+			return tag === 'p' || tag === 'div';
+		});
+		if (blockChildren.length === 0) return;
+
+		for (const block of blockChildren) {
+			// 在展开的块之间插入空格分隔符 / Insert space separator between unwrapped blocks
+			const space = doc.createTextNode(' ');
+			link.insertBefore(space, block);
+			unwrapElement(block);
+		}
+	});
+}
+
+/**
  * 将 HTML 转换为 Markdown
  * Convert HTML to Markdown using defuddle (built for Obsidian Web Clipper)
  *
@@ -38,6 +81,10 @@ export function convertHtmlToMarkdown(
 		const parser = new DOMParser();
 		return parser.parseFromString(html, 'text/html');
 	})();
+
+	// 预处理：展开 <a> 内块级子元素，防止断裂 Markdown 链接（私有 defuddle fork 修复迁移）
+	// Preprocess: unwrap block children in <a> to prevent broken Markdown links (ported from private defuddle fork)
+	unwrapBlockChildrenInLinks(doc);
 
 	const defuddleOpts: DefuddleOptions = {
 		url: options?.url,
