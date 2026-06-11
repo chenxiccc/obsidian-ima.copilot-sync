@@ -95,13 +95,10 @@ export async function ensureFolder(vault: Vault, folderPath: string): Promise<vo
 	}
 }
 
-/**
- * Chrome UA，仅用于 Node.js https.get 兜底反盗链（requestUrl 不支持自定义 UA/Referer，会被 Chromium 安全策略剥离）
- * Chrome UA for Node.js https.get anti-hotlink fallback only (requestUrl cannot send custom UA/Referer — stripped by Chromium security policy)
- * 必须硬编码，不能用 navigator API（违反 Obsidian 审核规范）
- * Must be hardcoded, navigator API is forbidden by Obsidian review guidelines
- */
-export const CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
+// CHROME_UA 已迁移至 http-utils.ts，此处重导出以保持向后兼容
+// CHROME_UA moved to http-utils.ts, re-exported here for backward compatibility
+export { CHROME_UA } from './http-utils';
+import { contentTypeToExt } from './http-utils';
 
 /**
  * HEAD 请求检查附件是否超过大小限制
@@ -154,7 +151,7 @@ export function extractExtFromUrl(url: string): string {
  */
 export function buildStableFilename(
 	url: string,
-	options: { titleBase?: string; fallbackName: string; fallbackExt?: string },
+	options: { titleBase?: string; fallbackName: string; fallbackExt?: string; contentType?: string },
 ): string {
 	let filename = '';
 	let ext = '';
@@ -177,6 +174,25 @@ export function buildStableFilename(
 
 	if (!ext) {
 		ext = extractExtFromUrl(url) || guessFileExtension(url) || options.fallbackExt || '';
+	}
+
+	// Content-Type 修正（优先级：wx_fmt > Content-Type > URL 扩展名）
+	// Content-Type correction (priority: wx_fmt > Content-Type > URL extension)
+	// 当 HTTP 响应的实际内容类型与 URL 扩展名不一致时，用 Content-Type 覆盖
+	// When actual content type differs from URL extension, override with Content-Type
+	// 参考 Share to Save image-handler.ts:136-149 / Ref: Share to Save image-handler.ts:136-149
+	if (options.contentType) {
+		const ctExt = contentTypeToExt(options.contentType);
+		if (ctExt && ext && ext !== ctExt) {
+			// 剥离 filename 中旧扩展名 / Strip old extension from filename
+			const dotIdx = filename.lastIndexOf('.');
+			if (dotIdx > 0) filename = filename.slice(0, dotIdx);
+			ext = ctExt;
+		}
+		// URL 未识别扩展名但 Content-Type 有值，也采用 / URL had no extension, adopt Content-Type's
+		if (ctExt && !ext) {
+			ext = ctExt;
+		}
 	}
 
 	const safeTitle = sanitizeTitle(options.titleBase, options.fallbackName);

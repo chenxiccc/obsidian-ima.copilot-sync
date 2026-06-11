@@ -1,7 +1,6 @@
 import { requestUrl, Vault, normalizePath } from 'obsidian';
 import type { AttachmentOptions } from './path-utils';
 import {
-	CHROME_UA,
 	escapePathForMarkdown,
 	sanitizeFilename,
 	resolveAttachmentFolder,
@@ -11,6 +10,7 @@ import {
 	extractNoteDir,
 	resolveLinkFormat,
 } from './path-utils';
+import { buildHeaders } from './http-utils';
 
 // ─── 通用文件下载器（支持反盗链）/ Generic file downloader (with anti-hotlink support) ──
 
@@ -90,8 +90,8 @@ export class FileDownloader {
 		// 基础请求头：requestUrl 不支持自定义 UA/Referer（会被 Chromium 安全策略剥离），仅 Node.js 路径可传递
 		// Base headers: requestUrl cannot send custom UA/Referer (stripped by Chromium security policy), only Node.js path can deliver them
 		const baseHeaders: Record<string, string> = {
-			'Accept': '*/*',
-			...extraHeaders,
+			...buildHeaders(undefined, '*/*'),  // no Referer for file downloads, browser-like headers
+			...extraHeaders,                     // IMA headers override defaults
 		};
 
 		try {
@@ -108,12 +108,9 @@ export class FileDownloader {
 			throw new Error(`文件下载失败 / File download failed: requestUrl failed and anti-hotlink enhanced is disabled`);
 		}
 
-		// Node.js https.get 可可靠发送自定义 UA/Referer，设置 Chrome UA 以绕过防盗链
-		// Node.js https.get can reliably send custom UA/Referer, set Chrome UA for anti-hotlink
-		const nodeHeaders: Record<string, string> = {
-			'User-Agent': CHROME_UA,
-			...baseHeaders,
-		};
+		// Node.js https.get 可可靠发送自定义 UA/Referer，使用 buildHeaders 模拟浏览器请求
+		// Node.js https.get can reliably send custom UA/Referer, use buildHeaders to emulate browser
+		const nodeHeaders: Record<string, string> = { ...baseHeaders };
 		// 微信 CDN 图片需要 Referer 绕过防盗链（参考 Share to Save image-handler.ts:292-299）
 		// WeChat CDN images need Referer to bypass hotlink protection (ref: Share to Save image-handler.ts:292-299)
 		if (/qpic\.cn/.test(url) && !nodeHeaders['Referer']) {
@@ -126,6 +123,64 @@ export class FileDownloader {
 			const msg = err instanceof Error ? err.message : String(err);
 			throw new Error(`文件下载失败 / File download failed: ${msg}`);
 		}
+	}
+
+	/**
+	 * 将 URL 下载到内存（不写文件），返回 ArrayBuffer + Content-Type
+	 * Download URL to memory (no file write), returns ArrayBuffer + Content-Type
+	 *
+	 * 遵循 requestUrl → Node.js https 的兜底逻辑（受 antiHotlinkEnhanced 控制）
+	 * Follows requestUrl → Node.js https fallback (gated by antiHotlinkEnhanced)
+	 *
+	 * Content-Type 用于后续扩展名修正：当 URL 扩展名与 HTTP 实际内容类型不一致时，
+	 * 可用 contentTypeToExt() 推导正确扩展名（如知乎 CDN .avis 实际是 PNG）
+	 * Content-Type is used for extension correction when URL extension doesn't match actual content type
+	 */
+	async downloadToBuffer(
+		url: string,
+		extraHeaders?: Record<string, string>,
+		antiHotlinkEnhanced = false,
+	): Promise<{ buffer: ArrayBuffer; contentType: string }> {
+		// 尝试 requestUrl（可获取 Content-Type 响应头）
+		// Try requestUrl (can get Content-Type response header)
+		try {
+			const response = await requestUrl({
+				url,
+				method: 'GET',
+				headers: {
+					...buildHeaders(undefined, '*/*'),
+					...extraHeaders,
+				},
+				throw: false,
+			});
+			if (response.status < 400) {
+				const ct = (response.headers?.['content-type'] as string) ?? '';
+				return { buffer: response.arrayBuffer, contentType: ct };
+			}
+		} catch (err) {
+			console.warn(`ima.copilot Sync: requestUrl 下载到内存失败 / requestUrl download to buffer failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+
+		// Node.js https 兜底（仅当防盗链增强开启）/ Node.js https fallback (only when anti-hotlink enhanced)
+		if (!antiHotlinkEnhanced) {
+			throw new Error('文件下载失败 / File download failed: requestUrl failed and anti-hotlink enhanced is disabled');
+		}
+
+		const nodeHeaders: Record<string, string> = {
+			...buildHeaders(undefined, 'image/*, */*'),
+			...extraHeaders,
+		};
+		// 微信 CDN 图片需要 Referer（参考 Share to Save image-handler.ts:292-299）
+		// WeChat CDN images need Referer (ref: Share to Save image-handler.ts:292-299)
+		if (/qpic\.cn/.test(url) && !nodeHeaders['Referer']) {
+			nodeHeaders['Referer'] = 'https://mp.weixin.qq.com/';
+		}
+
+		const { buffer, contentType } = await this.nodeHttpsGetBuffer(url, nodeHeaders);
+		return {
+			buffer: (buffer.buffer as ArrayBuffer).slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+			contentType,
+		};
 	}
 
 	/** 通过 requestUrl 下载 / Download via requestUrl */
@@ -162,17 +217,15 @@ export class FileDownloader {
 	 * 通过 Node.js https.get 获取数据 Buffer（桌面端兜底共享实现）
 	 * Fetch data Buffer via Node.js https.get (shared desktop fallback implementation)
 	 */
-	private nodeHttpsGetBuffer(url: string, headers: Record<string, string>): Promise<Buffer> {
-		let https: typeof import('https');
-		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports
-			https = require('https') as typeof import('https');
-		} catch {
-			throw new Error('Node.js https 模块不可用（可能为移动端环境）/ Node.js https module unavailable (likely mobile environment)');
-		}
+	private nodeHttpsGetBuffer(url: string, headers: Record<string, string>): Promise<{ buffer: Buffer; contentType: string }> {
+		// 根据协议动态选择模块，支持 HTTP 和 HTTPS（参考 Share to Save image-handler.ts:370-372）
+		// Select module by protocol, support both HTTP and HTTPS (ref: Share to Save image-handler.ts:370-372)
+		const protocol = new URL(url).protocol === 'http:' ? 'http' : 'https';
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const mod = require(protocol) as typeof import('https');
 
-		return new Promise<Buffer>((resolve, reject) => {
-			const req = https.get(url, { headers }, (res) => {
+		return new Promise<{ buffer: Buffer; contentType: string }>((resolve, reject) => {
+			const req = mod.get(url, { headers }, (res) => {
 				if (!res.statusCode || res.statusCode >= 400) {
 					reject(new Error(`HTTP ${res.statusCode}`));
 					return;
@@ -183,6 +236,9 @@ export class FileDownloader {
 						.catch(reject);
 					return;
 				}
+				// 捕获 Content-Type 用于后续扩展名修正（参考 Share to Save image-handler.ts:388）
+				// Capture Content-Type for later extension correction (ref: Share to Save image-handler.ts:388)
+				const contentType = res.headers['content-type'] ?? '';
 				const chunks: Buffer[] = [];
 				res.on('data', (chunk: Buffer) => chunks.push(chunk));
 				res.on('end', () => {
@@ -190,7 +246,7 @@ export class FileDownloader {
 					if (buffer.length < 1024) {
 						console.warn(`ima.copilot Sync: Node.js 仅获取 ${buffer.length} 字节，可能是防盗链错误页 / Node.js only got ${buffer.length} bytes, may be anti-hotlink error page`);
 					}
-					resolve(buffer);
+					resolve({ buffer, contentType });
 				});
 				res.on('error', reject);
 			});
@@ -208,7 +264,7 @@ export class FileDownloader {
 		destPath: string,
 		headers: Record<string, string>,
 	): Promise<void> {
-		const buffer = await this.nodeHttpsGetBuffer(url, headers);
+		const { buffer } = await this.nodeHttpsGetBuffer(url, headers);
 		await this.vault.adapter.writeBinary(destPath, (buffer.buffer as ArrayBuffer).slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
 		console.debug(`ima.copilot Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
 	}
@@ -224,7 +280,7 @@ export class FileDownloader {
 		url: string,
 		headers: Record<string, string>,
 	): Promise<string> {
-		const buffer = await this.nodeHttpsGetBuffer(url, headers);
+		const { buffer } = await this.nodeHttpsGetBuffer(url, headers);
 		return buffer.toString('utf-8');
 	}
 

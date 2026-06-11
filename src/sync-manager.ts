@@ -7,7 +7,8 @@ import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
 import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { CHROME_UA, sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash, classifyUrl } from './path-utils';
+import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash, classifyUrl } from './path-utils';
+import { buildHeaders } from './http-utils';
 import { HeadlessExtractor } from './headless-extractor';
 
 // ─── 同步管理器 / Sync manager ───────────────────────────────────────────────
@@ -861,10 +862,9 @@ export class SyncManager {
 					// headless failed → fallback to Node.js
 					console.warn(`ima.copilot Sync: Headless 提取失败，降级到 Node.js / Headless failed, falling back to Node.js: ${url}`);
 					try {
-						const nodeHeaders: Record<string, string> = {
-							'User-Agent': CHROME_UA,
-							...baseHeaders,
-						};
+						const nodeHeaders = buildHeaders(url, 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+						// IMA headers（来自 get_media_info）覆盖 buildHeaders 默认值 / IMA headers override buildHeaders defaults
+						if (headers) Object.assign(nodeHeaders, headers);
 						html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 					} catch (nodeErr) {
 						// Node.js 也失败 → 跳转到外层 catch 的兜底处理
@@ -897,12 +897,11 @@ export class SyncManager {
 					const requestUrlMsg = requestUrlErr instanceof Error ? requestUrlErr.message : String(requestUrlErr);
 					console.warn(`ima.copilot Sync: requestUrl 网页获取失败，尝试 Node.js 兜底 / requestUrl web fetch failed, trying Node.js fallback: ${requestUrlMsg}`);
 
-					// Node.js https 可可靠发送自定义 UA/Referer，设置 Chrome UA 绕过防盗链
-					// Node.js https can reliably send custom UA/Referer, set Chrome UA to bypass anti-hotlink
-					const nodeHeaders: Record<string, string> = {
-						'User-Agent': CHROME_UA,
-						...baseHeaders,
-					};
+					// Node.js https 可可靠发送自定义 UA/Referer，使用 buildHeaders 模拟浏览器请求
+					// Node.js https can reliably send custom UA/Referer, use buildHeaders to emulate browser
+					const nodeHeaders = buildHeaders(url, 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+					// IMA headers（来自 get_media_info）覆盖 buildHeaders 默认值 / IMA headers override buildHeaders defaults
+					if (headers) Object.assign(nodeHeaders, headers);
 					html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 				}
 
