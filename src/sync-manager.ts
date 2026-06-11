@@ -380,7 +380,7 @@ export class SyncManager {
 				`ima.copilot Sync: ${unready.length} 个条目解析未完成，第 ${attempt + 1}/${PARSE_RETRY_MAX} 次重试等待...`,
 				unready.map(i => i.title),
 			);
-			await new Promise(r => setTimeout(r, PARSE_RETRY_DELAY_MS));
+			await new Promise(r => window.setTimeout(r, PARSE_RETRY_DELAY_MS));
 
 			// 重新拉取全部条目以获取最新 parse_progress / Re-fetch all items for latest parse_progress
 			const refreshedItems = numericKbId
@@ -708,7 +708,7 @@ export class SyncManager {
 					console.debug(
 						`ima.copilot Sync: get_media_info url_info 为空，第 ${attempt + 1}/${FILE_RETRY_MAX} 次重试: ${item.title}`,
 					);
-					await new Promise(r => setTimeout(r, FILE_RETRY_DELAY_MS));
+					await new Promise(r => window.setTimeout(r, FILE_RETRY_DELAY_MS));
 					try {
 						const retryInfo = await this.client!.getMediaInfo(item.media_id);
 						if (retryInfo.url_info?.url) {
@@ -768,8 +768,6 @@ export class SyncManager {
 				: isZhihu ? convertZhihuHtmlToMarkdown
 				: undefined;
 			const result = await this.syncWebContent(params.url, params.headers, params.title, params.mediaId, conv);
-			if (isXhs) {
-			}
 			return result;
 		}
 
@@ -864,16 +862,10 @@ export class SyncManager {
 					// headless 失败 → 降级到 Node.js 兜底
 					// headless failed → fallback to Node.js
 					console.warn(`ima.copilot Sync: Headless 提取失败，降级到 Node.js / Headless failed, falling back to Node.js: ${url}`);
-					try {
-						const nodeHeaders = buildHeaders(url, 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
-						// IMA headers（来自 get_media_info）覆盖 buildHeaders 默认值 / IMA headers override buildHeaders defaults
-						if (headers) Object.assign(nodeHeaders, headers);
-						html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
-					} catch (nodeErr) {
-						// Node.js 也失败 → 跳转到外层 catch 的兜底处理
-						// Node.js also failed → jump to outer catch fallback
-						throw nodeErr;
-					}
+					const nodeHeaders = buildHeaders(url, 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+					// IMA headers（来自 get_media_info）覆盖 buildHeaders 默认值 / IMA headers override buildHeaders defaults
+					if (headers) Object.assign(nodeHeaders, headers);
+					html = await this.fileDownloader.fetchHtmlViaNodeHttps(url, nodeHeaders);
 				}
 			} else {
 				try {

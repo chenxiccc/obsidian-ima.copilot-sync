@@ -18,6 +18,30 @@ const CONTENT_STABLE_CHECKS = 2;
 
 const WECHAT_PARTITION = 'persist:ima-copilot-wechat';
 
+// ─── Electron 类型接口（编译时不可用，运行时由 Obsidian 提供）/ Electron type interfaces ──
+// Electron types are unavailable at compile time; resolved by Obsidian runtime at execution
+
+interface ElectronWebContents {
+	setUserAgent(ua: string): void;
+	once(event: string, callback: (...args: unknown[]) => void): void;
+	executeJavaScript(code: string): Promise<unknown>;
+	session?: {
+		webRequest?: {
+			onBeforeRequest(callback: (details: { url: string }, cb?: (opts: Record<string, unknown>) => void) => void): void;
+			onCompleted(callback: (details: { url: string }) => void): void;
+			onErrorOccurred(callback: (details: { url: string }) => void): void;
+		};
+	};
+}
+
+interface ElectronBrowserWindow {
+	webContents: ElectronWebContents;
+	loadURL(url: string, options?: Record<string, unknown>): Promise<void>;
+	isDestroyed(): boolean;
+	close(): void;
+}
+
+
 // ─── HeadlessExtractor / 无头提取器 ──────────────────────────────────────────
 
 /**
@@ -39,10 +63,10 @@ export class HeadlessExtractor {
 		}
 
 		// 使用 weread-plugin 确证的 require 模式 / Use weread-plugin proven require pattern
-		let RemoteBrowserWindow: any;
+		let RemoteBrowserWindow: { new (options: Record<string, unknown>): ElectronBrowserWindow } | undefined;
 		try {
-			const { remote } = require('electron');
-			RemoteBrowserWindow = remote.BrowserWindow;
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- Electron is external in esbuild, resolved by Obsidian runtime at execution
+			RemoteBrowserWindow = require('electron').remote.BrowserWindow;
 		} catch {
 			return null;
 		}
@@ -55,7 +79,7 @@ export class HeadlessExtractor {
 		const networkState = { pendingCount: 0, lastZeroTime: null as number | null, enabled: false };
 		const startTime = Date.now();
 
-		let win: any = null;
+		let win: ElectronBrowserWindow | null = null;
 		try {
 			// 创建隐藏 BrowserWindow，参考 weread-plugin 模式
 			// Create hidden BrowserWindow, following weread-plugin pattern
@@ -106,7 +130,7 @@ export class HeadlessExtractor {
 		} finally {
 			// 清理顺序：observer.disconnect → removeNetworkListeners → destroyWindow
 			// Cleanup order: observer.disconnect → removeNetworkListeners → destroyWindow
-			this.cleanup(win, networkState);
+			await this.cleanup(win, networkState);
 		}
 	}
 
@@ -197,7 +221,7 @@ export class HeadlessExtractor {
 	 * 参考 Share to Save headless-extractor.ts:205-231
 	 */
 	private registerNetworkListeners(
-		win: any,
+		win: ElectronBrowserWindow,
 		state: { pendingCount: number; lastZeroTime: number | null; enabled: boolean },
 	): void {
 		try {
@@ -232,7 +256,7 @@ export class HeadlessExtractor {
 	 * 参考 Share to Save headless-extractor.ts:243-268
 	 */
 	private removeNetworkListeners(
-		win: any | null,
+		win: ElectronBrowserWindow | null,
 		state: { pendingCount: number; lastZeroTime: number | null; enabled: boolean },
 	): void {
 		if (!win || !state.enabled) return;
@@ -289,7 +313,7 @@ export class HeadlessExtractor {
 	 *
 	 * 参考 Share to Save headless-extractor.ts:302-312
 	 */
-	private async injectDomObserver(win: any): Promise<void> {
+	private async injectDomObserver(win: ElectronBrowserWindow): Promise<void> {
 		try {
 			await win.webContents.executeJavaScript(
 				'if (!window.__sts_observer) {' +
@@ -307,7 +331,7 @@ export class HeadlessExtractor {
 	 *
 	 * 参考 Share to Save headless-extractor.ts:318-327
 	 */
-	private async checkDomStable(win: any): Promise<boolean> {
+	private async checkDomStable(win: ElectronBrowserWindow): Promise<boolean> {
 		try {
 			const stable: boolean = await win.webContents.executeJavaScript(
 				'typeof window.__sts_lastChange === "number" && (Date.now() - window.__sts_lastChange) > ' + DOM_STABLE_MS
@@ -327,7 +351,7 @@ export class HeadlessExtractor {
 	 * 参考 Share to Save headless-extractor.ts:342-360
 	 */
 	private async checkContentStable(
-		win: any,
+		win: ElectronBrowserWindow,
 		state: { lastLen: number; stableCount: number },
 	): Promise<boolean> {
 		try {
@@ -357,7 +381,7 @@ export class HeadlessExtractor {
 	 * 参考 Share to Save headless-extractor.ts:373-412
 	 */
 	private async waitForPageReady(
-		win: any,
+		win: ElectronBrowserWindow,
 		networkState: { pendingCount: number; lastZeroTime: number | null; enabled: boolean },
 		startTime: number,
 	): Promise<void> {
@@ -403,7 +427,7 @@ export class HeadlessExtractor {
 	 * 加载 URL 并等待 did-finish-load 或超时。
 	 * Load URL and wait for did-finish-load or timeout.
 	 */
-	private loadUrlWithTimeout(win: any, url: string): Promise<void> {
+	private loadUrlWithTimeout(win: ElectronBrowserWindow, url: string): Promise<void> {
 		return new Promise<void>((resolve, _reject) => {
 			const timer = window.setTimeout(() => {
 				// 超时不 reject，仍尝试提取当前 DOM / Don't reject on timeout, still try to extract current DOM
@@ -419,7 +443,7 @@ export class HeadlessExtractor {
 				resolve();
 			});
 
-			win.webContents.once('did-fail-load', (_event: any, _errorCode: number, _errorDescription: string) => {
+			win.webContents.once('did-fail-load', (_event: unknown, _errorCode: number, _errorDescription: string) => {
 				if (finished) return;
 				finished = true;
 				window.clearTimeout(timer);
@@ -444,7 +468,7 @@ export class HeadlessExtractor {
 	 * 先快速滚到底部 → 等 800ms（给图片加载时间）→ 瞬间跳回顶部 → 等 500ms。
 	 * Scroll to bottom → wait 800ms → instant jump to top → wait 500ms.
 	 */
-	private async scrollToTriggerLazyLoad(win: any): Promise<void> {
+	private async scrollToTriggerLazyLoad(win: ElectronBrowserWindow): Promise<void> {
 		try {
 			await win.webContents.executeJavaScript('window.scrollTo(0, document.body.scrollHeight)');
 			await new Promise(r => window.setTimeout(r, 800));
@@ -473,7 +497,7 @@ export class HeadlessExtractor {
 	 *
 	 * 参考 Share to Save headless-extractor.ts:486-504
 	 */
-	private async stampComputedProperties(win: any): Promise<void> {
+	private async stampComputedProperties(win: ElectronBrowserWindow): Promise<void> {
 		try {
 			await win.webContents.executeJavaScript(
 				'(function(){' +
@@ -501,7 +525,7 @@ export class HeadlessExtractor {
 	 *
 	 * 参考 Share to Save headless-extractor.ts:512-520
 	 */
-	private async extractHtml(win: any): Promise<string | null> {
+	private async extractHtml(win: ElectronBrowserWindow): Promise<string | null> {
 		try {
 			const html: string = await win.webContents.executeJavaScript(
 				'document.documentElement.outerHTML',
@@ -518,7 +542,7 @@ export class HeadlessExtractor {
 	 * 清理资源：MutationObserver disconnect → 网络监听器移除 → 窗口销毁
 	 * Clean up resources in order: observer disconnect → remove network listeners → destroy window
 	 */
-	private async cleanup(win: any | null, networkState: { pendingCount: number; lastZeroTime: number | null; enabled: boolean }): Promise<void> {
+	private async cleanup(win: ElectronBrowserWindow | null, networkState: { pendingCount: number; lastZeroTime: number | null; enabled: boolean }): Promise<void> {
 		try {
 			await win?.webContents.executeJavaScript(
 				'if (window.__sts_observer) { window.__sts_observer.disconnect(); delete window.__sts_observer; delete window.__sts_lastChange; }'
@@ -531,7 +555,7 @@ export class HeadlessExtractor {
 	/**
 	 * 销毁 BrowserWindow / Destroy BrowserWindow
 	 */
-	private destroyWindow(win: any): void {
+	private destroyWindow(win: ElectronBrowserWindow | null): void {
 		if (!win || win.isDestroyed()) return;
 		try {
 			win.close();

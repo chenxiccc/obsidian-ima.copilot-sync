@@ -1,5 +1,5 @@
 import Defuddle from 'defuddle/full';
-import type { DefuddleOptions, DefuddleResponse } from 'defuddle/full';
+import type { DefuddleOptions } from 'defuddle/full';
 import { escapeInlineHash } from './path-utils';
 
 // ─── HTML→Markdown 转换器（基于 defuddle）/ HTML→Markdown converter (defuddle-based) ────
@@ -437,7 +437,7 @@ function isWeChatBlockPage(doc: Document): boolean {
  */
 function buildCleanWeChatDom(doc: Document): Document {
 	const sourceBody = doc.querySelector('body');
-	if (!sourceBody) return document.implementation.createHTMLDocument('');
+	if (!sourceBody) return doc.implementation.createHTMLDocument('');
 	const clone = sourceBody.cloneNode(true) as HTMLElement;
 
 	// ── 1. <img data-src> → <img src>（参考 content-converter.ts:148-154）──
@@ -506,7 +506,7 @@ function buildCleanWeChatDom(doc: Document): Document {
 			const lines = codeEls.map(c => c.textContent || '');
 			const lang = pre.getAttribute('data-lang') || '';
 			pre.innerHTML = '';
-			const newCode = document.createElement('code');
+			const newCode = pre.ownerDocument.createElement('code');
 			if (lang) newCode.className = `language-${lang}`;
 			newCode.textContent = lines.join('\n');
 			pre.appendChild(newCode);
@@ -523,7 +523,7 @@ function buildCleanWeChatDom(doc: Document): Document {
 		});
 		// d) <br> → 换行符 / <br> → newline
 		pre.querySelectorAll('br').forEach(br => {
-			br.replaceWith(document.createTextNode('\n'));
+			br.replaceWith(br.ownerDocument.createTextNode('\n'));
 		});
 	});
 
@@ -546,7 +546,7 @@ function buildCleanWeChatDom(doc: Document): Document {
 
 	// ── 6. 挂载到新 Document 返回（参考 content-converter.ts:246）──
 	// Mount into a new Document (ref: content-converter.ts:246)
-	const newDoc = document.implementation.createHTMLDocument('');
+	const newDoc = doc.implementation.createHTMLDocument('');
 	newDoc.querySelector('body')!.replaceWith(clone);
 	return newDoc;
 }
@@ -789,7 +789,7 @@ function extractSwiperAreaImages(doc: Document): string {
 		if (!url || !/^https?:\/\//.test(url)) continue;
 		if (url.includes('pic_blank.gif')) continue;
 		if (!url.includes('mmbiz.qpic.cn')) continue;
-		const alt = (img as HTMLImageElement).alt || '';
+		const alt = img.alt || '';
 		parts.push(`![${alt}](${url})`);
 	}
 	return parts.length > 0 ? parts.join('\n') + '\n' : '';
@@ -837,7 +837,7 @@ function parseXiaohongshuInitialState(html: string): XhsNote | null {
 		// 替换 JSON 中非法的 JS 字面量 / Replace illegal JS literals
 		const cleaned = jsonStr.replace(/undefined/g, 'null').replace(/\bNaN\b/g, 'null');
 		const json = JSON.parse(cleaned) as Record<string, unknown>;
-		const noteDetailMap = (json as Record<string, unknown>).note as Record<string, unknown> | undefined;
+		const noteDetailMap = (json).note as Record<string, unknown> | undefined;
 		const ndm = noteDetailMap?.noteDetailMap as Record<string, unknown> | undefined;
 		if (!ndm) return null;
 		const noteId = Object.keys(ndm)[0];
@@ -966,7 +966,7 @@ function removeZhihuLoginModals(doc: Document): void {
 /** 判断文本是否像代码（用于代码块识别） */
 function isCodeLike(text: string): boolean {
 	return /^\s*(?:from\s+|import\s+|def\s+|class\s+|print\s*\(|#\s|if\s+|for\s+|while\s+|\w+\s*=\s*)/m.test(text)
-		|| (text.split('\n').length >= 3 && /[=){}\[\]]/.test(text));
+		|| (text.split('\n').length >= 3 && /[=){}[\]]/.test(text));
 }
 
 /** 专栏代码块规范化：<th> 代码表 → <pre><code> */
