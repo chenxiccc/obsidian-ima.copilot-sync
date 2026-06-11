@@ -186,7 +186,7 @@ export class SyncManager {
 			// 全量拉取，内存过滤增量（对齐知识库模式，一次请求同时服务增量+删除）
 			// Fetch all notes, filter incrementally in memory (align with KB pattern, one request for both)
 			const allNotes = await this.client.listAllNotes(0);
-			const existingMap = this.scanExistingNoteFiles(syncFolder);
+			const existingMap = await this.scanExistingNoteFiles(syncFolder);
 
 			// 删除同步：本地有 docid 但 API 已无 / Delete sync: local has docid but not in API
 			const apiDocIds = new Set(allNotes.map(n => n.docid));
@@ -240,7 +240,7 @@ export class SyncManager {
 					const kbFolder = normalizePath(`${syncFolder}/个人知识库/${sanitizeFilename(kbName || kbId)}`);
 					await ensureFolder(this.vault, kbFolder);
 
-					const existingMap = this.scanExistingKbFiles(kbFolder);
+					const existingMap = await this.scanExistingKbFiles(kbFolder);
 					const items = await this.client.listAllKnowledgeItems(kbId);
 
 					// 删除同步 / Delete sync
@@ -413,7 +413,7 @@ export class SyncManager {
 		}
 
 		// 扫描已有文件 / Scan existing files
-		const existingMap = this.scanExistingKbFiles(kbFolder);
+		const existingMap = await this.scanExistingKbFiles(kbFolder);
 
 		// 删除同步时包含未就绪条目，防止其被误删 / Include unready items in delete sync to prevent false deletion
 		const apiMediaIds = new Set(items.map(i => i.media_id));
@@ -568,22 +568,46 @@ export class SyncManager {
 	}
 
 	/**
+	 * 递归列举指定文件夹下所有 .md 文件的路径（限定目录，不触发全库扫描）
+	 * Recursively list all .md file paths under a specific folder (scoped, avoids vault-wide enumeration)
+	 */
+	private async listMdPathsInFolder(folderPath: string): Promise<string[]> {
+		const result: string[] = [];
+		const stack = [folderPath];
+
+		while (stack.length > 0) {
+			const current = stack.pop()!;
+			try {
+				const listed = await this.vault.adapter.list(current);
+				for (const file of listed.files) {
+					if (file.endsWith('.md')) {
+						result.push(normalizePath(current + '/' + file));
+					}
+				}
+				for (const folder of listed.folders) {
+					stack.push(normalizePath(current + '/' + folder));
+				}
+			} catch {
+				// 文件夹不存在时跳过 / Skip if folder doesn't exist
+			}
+		}
+
+		return result;
+	}
+
+	/**
 	 * 扫描知识库文件夹下已有 .md 文件，从 metadataCache 提取 media_id（零 I/O）
 	 * Scan existing KB .md files, extract media_id from metadataCache (zero I/O)
 	 */
-		// vault.getFiles() 用于增量同步：仅扫描 vault 中 .md 文件路径做存在性判断，不读取文件内容
-	// vault.getFiles() for incremental sync: only scans .md file paths for existence check, does not read file content
-	private scanExistingKbFiles(kbFolder: string): Map<string, string> {
+	private async scanExistingKbFiles(kbFolder: string): Promise<Map<string, string>> {
 		const map = new Map<string, string>();
-		const mdFiles = this.vault.getFiles().filter(f =>
-			f.extension === 'md' && f.path.startsWith(kbFolder + '/'),
-		);
+		const mdPaths = await this.listMdPathsInFolder(kbFolder);
 
-		for (const file of mdFiles) {
-			const cache = this.app.metadataCache.getFileCache(file);
+		for (const path of mdPaths) {
+			const cache = this.app.metadataCache.getCache(path);
 			const mediaId = (cache?.frontmatter as Record<string, unknown>)?.['media_id'];
 			if (typeof mediaId === 'string') {
-				map.set(mediaId, file.path);
+				map.set(mediaId, path);
 			}
 		}
 
@@ -594,22 +618,22 @@ export class SyncManager {
 	 * 扫描 syncFolder 根目录下已有 .md 文件，从 metadataCache 提取 docid（零 I/O）
 	 * Scan existing note .md files in syncFolder root, extract docid from metadataCache (zero I/O)
 	 */
-		// vault.getFiles() 用于增量同步：仅扫描 syncFolder 根目录 .md 文件，判断 docid 是否已同步
-	// vault.getFiles() for incremental sync: scans syncFolder root .md files to check if docid already synced
-	private scanExistingNoteFiles(syncFolder: string): Map<string, string> {
+	private async scanExistingNoteFiles(syncFolder: string): Promise<Map<string, string>> {
 		const map = new Map<string, string>();
-		const mdFiles = this.vault.getFiles().filter(f =>
-			f.extension === 'md' &&
-			f.path.startsWith(syncFolder + '/') &&
-			!f.path.slice(syncFolder.length + 1).includes('/'),
-		);
-
-		for (const file of mdFiles) {
-			const cache = this.app.metadataCache.getFileCache(file);
-			const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
-			if (typeof docid === 'string') {
-				map.set(docid, file.path);
+		// 只取根层 .md 文件（不含子文件夹）/ Only root-level .md files (exclude subfolders)
+		try {
+			const listed = await this.vault.adapter.list(syncFolder);
+			for (const file of listed.files) {
+				if (!file.endsWith('.md')) continue;
+				const path = normalizePath(syncFolder + '/' + file);
+				const cache = this.app.metadataCache.getCache(path);
+				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
+				if (typeof docid === 'string') {
+					map.set(docid, path);
+				}
 			}
+		} catch {
+			// 文件夹不存在时返回空 map / Return empty map if folder doesn't exist
 		}
 
 		return map;
@@ -1161,20 +1185,21 @@ export class SyncManager {
 	private async fixPendingImages(syncFolder: string, opts: AttachmentOptions): Promise<void> {
 		if (!opts.downloadImages && !opts.downloadFiles) return;
 
-		// vault.getFiles() 扫描所有已同步 .md 文件以修复残留外链图片，不读取文件内容
-		// vault.getFiles() scans all synced .md files to fix leftover external image links, does not read content
-		const mdFiles = this.vault.getFiles().filter(f =>
-			f.extension === 'md' && f.path.startsWith(syncFolder + '/'),
-		);
+		const mdPaths = await this.listMdPathsInFolder(syncFolder);
 
-		for (const file of mdFiles) {
+		for (const path of mdPaths) {
+			// 按需将路径转为 TFile（本方法需要 vault.read/modify）
+			// Convert path to TFile on demand (this method needs vault.read/modify)
+			const file = this.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) continue;
+
 			try {
 				const content = await this.vault.read(file);
 				if (!content.match(/!\[[^\]]*\]\(https?:\/\//)) continue;
 
 				// 若笔记有 docid 且认证客户端可用，重新拉 Markdown 获取新鲜图片 URL（避免 COS 临时链接过期）
 				// If note has docid and auth client is available, re-fetch Markdown for fresh image URLs (avoids expired COS signed URLs)
-				const cache = this.app.metadataCache.getFileCache(file);
+				const cache = this.app.metadataCache.getCache(path);
 				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
 
 				let fixed = content;
@@ -1318,15 +1343,11 @@ export class SyncManager {
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
-		// vault.getFiles() 扫描所有已同步 .md 文件以清理未被引用的孤儿图片，不读取文件内容
-		// vault.getFiles() scans all synced .md files to clean unreferenced orphan images, does not read content
-		const mdFiles = this.vault.getFiles().filter(f =>
-			f.extension === 'md' && f.path.startsWith(syncFolder + '/') && f.path !== skipFile,
-		);
+		const mdPaths = (await this.listMdPathsInFolder(syncFolder)).filter(p => p !== skipFile);
 
 		const referencedFilenames = new Set<string>();
-		for (const file of mdFiles) {
-			const cache = this.app.metadataCache.getFileCache(file);
+		for (const path of mdPaths) {
+			const cache = this.app.metadataCache.getCache(path);
 			if (!cache) continue;
 
 			for (const embed of cache.embeds ?? []) {
