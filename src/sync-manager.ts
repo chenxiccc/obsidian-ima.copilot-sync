@@ -582,11 +582,11 @@ export class SyncManager {
 				const listed = await this.vault.adapter.list(current);
 				for (const file of listed.files) {
 					if (file.endsWith('.md')) {
-						result.push(normalizePath(current + '/' + file));
+						result.push(normalizePath(file)); // adapter.list() returns vault-relative paths, use directly / vault 完整路径
 					}
 				}
 				for (const folder of listed.folders) {
-					stack.push(normalizePath(current + '/' + folder));
+					stack.push(normalizePath(folder)); // adapter.list() returns vault-relative paths / vault 完整路径
 				}
 			} catch {
 				// 文件夹不存在时跳过 / Skip if folder doesn't exist
@@ -626,7 +626,7 @@ export class SyncManager {
 			const listed = await this.vault.adapter.list(syncFolder);
 			for (const file of listed.files) {
 				if (!file.endsWith('.md')) continue;
-				const path = normalizePath(syncFolder + '/' + file);
+				const path = normalizePath(file); // adapter.list() returns vault-relative path / vault 完整路径
 				const cache = this.app.metadataCache.getCache(path);
 				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
 				if (typeof docid === 'string') {

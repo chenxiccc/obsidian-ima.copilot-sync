@@ -116,7 +116,7 @@ export function convertHtmlToMarkdown(
 
 	// 元数据增强：Schema.org JSON-LD + 站点名剥离（参考 Share to Save metadata-extractor.ts）
 	// Metadata enhancement: Schema.org JSON-LD + site name stripping (ref: Share to Save metadata-extractor.ts)
-	return enhanceMetadata(mdResult, html);
+	return enhanceMetadata(mdResult, html, doc);
 }
 
 /**
@@ -182,8 +182,8 @@ function extractWeChatPublishTime(html: string): string | null {
 // ─── 元数据增强（Schema.org + meta 标签兜底）/ Metadata enhancement ──────────
 
 /** 增强 defuddle 元数据：站点名剥离 + Schema.org JSON-LD 兜底 */
-function enhanceMetadata(result: HtmlToMdResult, html: string): HtmlToMdResult {
-	const doc = new DOMParser().parseFromString(html, 'text/html');
+function enhanceMetadata(result: HtmlToMdResult, html: string, doc?: Document): HtmlToMdResult {
+	if (!doc) doc = new DOMParser().parseFromString(html, 'text/html');
 	const schema = parseSchemaOrg(doc);
 	if (result.title) {
 		const siteName = getSiteName(doc, schema);
@@ -243,6 +243,8 @@ function getSiteName(doc: Document, schema: Record<string, unknown>): string {
 /** 剥离 "Title | Site" / "Site | Title" 中的站点名 */
 function stripSiteName(rawTitle: string, siteName: string): string {
 	if (!siteName || siteName.length < 2) return rawTitle;
+	// 防 ReDoS：限制站点名长度 / ReDoS prevention: cap site name length
+	if (siteName.length > 100) siteName = siteName.slice(0, 100);
 	if (siteName.toLowerCase() === rawTitle.toLowerCase()) return rawTitle;
 	const escaped = siteName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	const sep = '[|\\-\u2013\u2014\u00b7]';
@@ -917,7 +919,10 @@ export function convertXiaohongshuHtmlToMarkdown(html: string, url?: string): Ht
 			title = title.replace(/\s*[-|]\s*小红书\s*$/, '').trim();
 		}
 
-		return { title, author, published, content };
+		// 仍走 enhanceMetadata 做通用增强（站点名剥离、Schema.org 兜底）
+		// Still apply enhanceMetadata for generic improvements (site name stripping, Schema.org fallback)
+		const enhanced = enhanceMetadata({ title, author, published, content, fromMeta: false }, html);
+		return enhanced;
 	}
 
 	// 回退：INITIAL_STATE 解析失败时使用 defuddle（保持原有逻辑）

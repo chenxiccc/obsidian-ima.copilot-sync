@@ -271,6 +271,7 @@ export class FileDownloader {
 				// 处理重定向（含相对路径解析）/ Handle redirect (with relative URL resolution)
 				if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
 					res.resume();  // 排空响应体 / Drain response body
+					settled = true;  // 阻止原请求的 timeout 重试 / prevent original timeout from retrying
 					const redirectUrl = new URL(res.headers.location, url).toString();
 					this.nodeHttpsGetBuffer(redirectUrl, headers, retryCount, redirectCount + 1)
 						.then(resolve)
@@ -279,6 +280,13 @@ export class FileDownloader {
 				}
 
 				const sc = res.statusCode || 0;
+
+				// 304 Not Modified — 无响应体，终端错误 / no body, terminal error
+				if (sc === 304) {
+					res.resume();
+					reject(new Error('HTTP 304 Not Modified'));
+					return;
+				}
 
 				// 限流 — 可重试 / Rate limited — retryable (ref: Scrapling BLOCKED_CODES)
 				if (sc === 429) {

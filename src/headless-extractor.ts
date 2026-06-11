@@ -358,7 +358,7 @@ export class HeadlessExtractor {
 			const currentLen: number = await win.webContents.executeJavaScript(
 				'((document.body && document.body.innerText) || "").trim().length'
 			) as number;
-			if (currentLen > 0 && currentLen === state.lastLen) {
+			if (currentLen === state.lastLen) {
 				state.stableCount++;
 			} else {
 				state.stableCount = 0;
@@ -527,9 +527,9 @@ export class HeadlessExtractor {
 	 */
 	private async extractHtml(win: ElectronBrowserWindow): Promise<string | null> {
 		try {
-			const html: string = await win.webContents.executeJavaScript(
+			const html = await win.webContents.executeJavaScript(
 				'document.documentElement.outerHTML',
-			);
+			) as string;
 			return html;
 		} catch {
 			return null;
