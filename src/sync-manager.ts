@@ -4,7 +4,7 @@ import type { AttachmentOptions } from './path-utils';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
 import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima-client';
 import { ImageHandler } from './image-handler';
-import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
+import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, convertZhihuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
 import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
 import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash, classifyUrl } from './path-utils';
@@ -761,8 +761,11 @@ export class SyncManager {
 	): Promise<string> {
 		if (FETCHABLE_MEDIA_TYPES.has(mediaType)) {
 			const isXhs = isXiaohongshuUrl(params.url);
+			const siteClass = classifyUrl(params.url);
+			const isZhihu = siteClass === 'zhihu';
 			const conv = mediaType === MEDIA_TYPE_WECHAT ? convertWeChatHtmlToMarkdown
 				: isXhs ? convertXiaohongshuHtmlToMarkdown
+				: isZhihu ? convertZhihuHtmlToMarkdown
 				: undefined;
 			const result = await this.syncWebContent(params.url, params.headers, params.title, params.mediaId, conv);
 			if (isXhs) {

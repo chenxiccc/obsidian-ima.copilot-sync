@@ -1,5 +1,6 @@
 import Defuddle from 'defuddle/full';
 import type { DefuddleOptions, DefuddleResponse } from 'defuddle/full';
+import { escapeInlineHash } from './path-utils';
 
 // ─── HTML→Markdown 转换器（基于 defuddle）/ HTML→Markdown converter (defuddle-based) ────
 
@@ -105,12 +106,17 @@ export function convertHtmlToMarkdown(
 		published = extractWeChatPublishTime(html) ?? '';
 	}
 
-	return {
+	// 构建初始结果 / Build initial result
+	const mdResult: HtmlToMdResult = {
 		title: result.title ?? '',
 		author: result.author ?? '',
 		published,
 		content: result.content ?? '',
 	};
+
+	// 元数据增强：Schema.org JSON-LD + 站点名剥离（参考 Share to Save metadata-extractor.ts）
+	// Metadata enhancement: Schema.org JSON-LD + site name stripping (ref: Share to Save metadata-extractor.ts)
+	return enhanceMetadata(mdResult, html);
 }
 
 /**
@@ -172,6 +178,106 @@ function extractWeChatPublishTime(html: string): string | null {
 
 	return null;
 }
+
+// ─── 元数据增强（Schema.org + meta 标签兜底）/ Metadata enhancement ──────────
+
+/** 增强 defuddle 元数据：站点名剥离 + Schema.org JSON-LD 兜底 */
+function enhanceMetadata(result: HtmlToMdResult, html: string): HtmlToMdResult {
+	const doc = new DOMParser().parseFromString(html, 'text/html');
+	const schema = parseSchemaOrg(doc);
+	if (result.title) {
+		const siteName = getSiteName(doc, schema);
+		result.title = stripSiteName(result.title, siteName);
+	}
+	if (!result.author) result.author = extractAuthor(doc, schema);
+	if (!result.published) result.published = extractPublished(doc, schema);
+	return result;
+}
+
+/** 解析页面中的 schema.org JSON-LD <script> */
+function parseSchemaOrg(doc: Document): Record<string, unknown> {
+	const scripts = Array.from(doc.querySelectorAll('script[type="application/ld+json"]'));
+	for (const script of scripts) {
+		try {
+			const data = JSON.parse(script.textContent || '') as Record<string, unknown>;
+			const graph = data?.['@graph'];
+			if (Array.isArray(graph)) {
+				for (const item of graph) {
+					if (isContentSchema(item)) return item;
+				}
+			}
+			if (isContentSchema(data)) return data;
+		} catch { /* JSON invalid */ }
+	}
+	return {};
+}
+
+function isContentSchema(data: unknown): data is Record<string, unknown> {
+	if (!data || typeof data !== 'object') return false;
+	const d = data as Record<string, unknown>;
+	const type = typeof d['@type'] === 'string' ? d['@type'] : '';
+	return /Article|WebPage|BlogPosting|NewsArticle|Blog|CreativeWork/i.test(type);
+}
+
+function getMeta(doc: Document, attr: string, value: string): string {
+	try { return doc.querySelector('meta[' + attr + '="' + value + '"]')?.getAttribute('content')?.trim() || ''; } catch { return ''; }
+}
+
+function getSchemaString(schema: Record<string, unknown>, path: string): string {
+	let current: unknown = schema;
+	for (const key of path.split('.')) {
+		if (current && typeof current === 'object') {
+			current = (current as Record<string, unknown>)[key];
+		} else { return ''; }
+	}
+	return typeof current === 'string' ? current : '';
+}
+
+function getSiteName(doc: Document, schema: Record<string, unknown>): string {
+	return getMeta(doc, 'property', 'og:site_name')
+		|| getMeta(doc, 'name', 'application-name')
+		|| getSchemaString(schema, 'publisher.name')
+		|| '';
+}
+
+/** 剥离 "Title | Site" / "Site | Title" 中的站点名 */
+function stripSiteName(rawTitle: string, siteName: string): string {
+	if (!siteName || siteName.length < 2) return rawTitle;
+	if (siteName.toLowerCase() === rawTitle.toLowerCase()) return rawTitle;
+	const escaped = siteName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const sep = '[|\\-\u2013\u2014\u00b7]';
+	const suffixRe = new RegExp('\\s*' + sep + '\\s*' + escaped + '\\s*$', 'i');
+	if (suffixRe.test(rawTitle)) return rawTitle.replace(suffixRe, '').trim();
+	const prefixRe = new RegExp('^\\s*' + escaped + '\\s*' + sep + '\\s*', 'i');
+	if (prefixRe.test(rawTitle)) return rawTitle.replace(prefixRe, '').trim();
+	return rawTitle;
+}
+
+function extractAuthor(doc: Document, schema: Record<string, unknown>): string {
+	const metaAuthor = getMeta(doc, 'name', 'author');
+	if (metaAuthor) return metaAuthor;
+	const articleAuthor = getMeta(doc, 'property', 'article:author');
+	if (articleAuthor && !/^https?:\/\//i.test(articleAuthor)) return articleAuthor;
+	const schemaAuthor = getSchemaString(schema, 'author.name');
+	if (schemaAuthor) return schemaAuthor;
+	const relAuthor = doc.querySelector('a[rel="author"]');
+	if (relAuthor) { const text = (relAuthor.textContent || '').trim(); if (text && text.length < 100) return text; }
+	return '';
+}
+
+function extractPublished(doc: Document, schema: Record<string, unknown>): string {
+	const publishedMeta = getMeta(doc, 'property', 'article:published_time')
+		|| getMeta(doc, 'name', 'publishDate') || getMeta(doc, 'name', 'sailthru.date');
+	if (publishedMeta) return publishedMeta;
+	const schemaDate = getSchemaString(schema, 'datePublished');
+	if (schemaDate) return schemaDate;
+	const timeEl = doc.querySelector('time[datetime]');
+	if (timeEl) { const dt = timeEl.getAttribute('datetime'); if (dt) return dt; }
+	const abbr = doc.querySelector('abbr[itemprop="datePublished"]');
+	if (abbr) { const t = abbr.getAttribute('title'); if (t) return t; }
+	return '';
+}
+
 
 // ─── 微信 JS 渲染文章 meta 提取 / WeChat JS-rendered article meta extraction ──
 
@@ -697,25 +803,49 @@ function extractSwiperAreaImages(doc: Document): string {
 // isXiaohongshuUrl moved to path-utils.ts for unified site detection, re-export for backward compat
 export { isXiaohongshuUrl } from './path-utils';
 
+/** 小红书 __INITIAL_STATE__ 中的笔记结构 / XHS note structure from __INITIAL_STATE__ */
+interface XhsNote {
+	type?: string;              // 'video' | 'normal'
+	title?: string;
+	desc?: string | string[];
+	imageList?: Array<{ urlDefault?: string; url?: string }>;
+	user?: { nickname?: string; userId?: string };
+	time?: number;              // 毫秒 Unix 时间戳 / ms Unix timestamp
+}
+
 /**
- * 从小红书 __INITIAL_STATE__ JSON 提取图片 URL
- * Extract image URLs from Xiaohongshu __INITIAL_STATE__ JSON
+ * 解析小红书 __INITIAL_STATE__ JSON，返回完整笔记数据
+ * Parse Xiaohongshu __INITIAL_STATE__ JSON, returns full note data
+ *
+ * 采用 share-to-save 的更稳健方式（lines 575-607）：
+ * - 贪婪匹配到行尾，lastIndexOf('}') 截断，undefined/NaN 清理
+ * Robust parsing per share-to-save approach (lines 575-607):
+ * - Greedy match to end, lastIndexOf('}') truncation, undefined/NaN cleanup
  */
-function extractXiaohongshuImages(html: string): string[] {
-	const match = html.match(/window\.__INITIAL_STATE__\s*=\s*(.+?)<\/script>/);
-	if (!match?.[1]) return [];
+function parseXiaohongshuInitialState(html: string): XhsNote | null {
+	const match = html.match(/window\.__INITIAL_STATE__\s*=\s*([\s\S]*)$/);
+	if (!match?.[1]) return null;
 
 	try {
-		const json = JSON.parse(match[1].replace(/undefined/g, 'null'));
-		const noteId = Object.keys(json.note?.noteDetailMap || {})[0];
-		if (!noteId) return [];
-		const noteDetail = (json.note?.noteDetailMap as Record<string, unknown>)?.[noteId as string] as { note?: { imageList?: Array<{ urlDefault?: string }> } } | undefined;
-		const imageList = noteDetail?.note?.imageList || [];
-		return imageList
-			.map((img: { urlDefault?: string }) => img.urlDefault || '')
-			.filter(Boolean);
+		let jsonStr = match[1].trim();
+		// 去掉末尾分号 / Strip trailing semicolon
+		jsonStr = jsonStr.replace(/;\s*$/, '');
+		// 取最后一个 } 截断，去掉 JSON 后的多余 JS 代码
+		// Truncate at last } to remove trailing JS code
+		const lastBrace = jsonStr.lastIndexOf('}');
+		if (lastBrace >= 0) jsonStr = jsonStr.slice(0, lastBrace + 1);
+		// 替换 JSON 中非法的 JS 字面量 / Replace illegal JS literals
+		const cleaned = jsonStr.replace(/undefined/g, 'null').replace(/\bNaN\b/g, 'null');
+		const json = JSON.parse(cleaned) as Record<string, unknown>;
+		const noteDetailMap = (json as Record<string, unknown>).note as Record<string, unknown> | undefined;
+		const ndm = noteDetailMap?.noteDetailMap as Record<string, unknown> | undefined;
+		if (!ndm) return null;
+		const noteId = Object.keys(ndm)[0];
+		if (!noteId) return null;
+		const noteDetail = ndm[noteId] as Record<string, unknown> | undefined;
+		return (noteDetail?.note as XhsNote) || null;
 	} catch {
-		return [];
+		return null;
 	}
 }
 
@@ -723,23 +853,287 @@ function extractXiaohongshuImages(html: string): string[] {
  * 小红书文章 HTML → Markdown
  * Xiaohongshu article HTML → Markdown
  *
- * 文本通过 defuddle + contentSelector 提取，图片从 __INITIAL_STATE__ JSON 提取
- * Text extracted via defuddle + contentSelector, images from __INITIAL_STATE__ JSON
+ * 优先级：__INITIAL_STATE__（最完整）→ defuddle + contentSelector 回退
+ * Priority: __INITIAL_STATE__ (most complete) → defuddle + contentSelector fallback
+ *
+ * 参考 Share to Save content-converter.ts XiaohongshuConverter (lines 473-618)
  */
 export function convertXiaohongshuHtmlToMarkdown(html: string, url?: string): HtmlToMdResult {
 	const parser = new DOMParser();
 	const doc = parser.parseFromString(html, 'text/html');
+	const note = parseXiaohongshuInitialState(html);
 
-	// 文本提取 / Text extraction
+	if (note) {
+		const parts: string[] = [];
+
+		// 视频笔记标记 / Video note indicator
+		if (note.type === 'video') {
+			parts.push('> [!NOTE] 视频笔记 / Video Note\n');
+		}
+
+		// 正文 / Content
+		if (note.desc) {
+			let text = Array.isArray(note.desc) ? note.desc.join('\n') : String(note.desc);
+			// 去除 XHS 话题标记 / Remove XHS topic markers
+			text = text.replace(/\[话题\]#?/g, '');
+			// 转义 # 防止 Obsidian 标签误识别 / Escape # for Obsidian tag safety
+			text = escapeInlineHash(text);
+			parts.push(text);
+		}
+
+		// 图片 / Images
+		const images = (note.imageList || [])
+			.map(img => img.urlDefault || img.url || '')
+			.filter(Boolean);
+		if (images.length > 0) {
+			parts.push('');
+			parts.push(images.map(u => `![](${u})`).join('\n'));
+		}
+
+		const content = parts.join('\n');
+
+		// 元数据 / Metadata
+		let title = note.title || '';
+		let author = note.user?.nickname || '';
+		let published = '';
+
+		// 标题回退：<title> 标签，剥离 " - 小红书" 后缀
+		if (!title) {
+			const rawTitle = doc.querySelector('title')?.textContent?.trim() || '';
+			title = rawTitle.replace(/\s*-\s*小红书\s*$/, '').trim();
+		}
+
+		// 发布时间：毫秒时间戳 → 北京时间
+		if (note.time != null && note.time > 0) {
+			const ms = note.time > 1e12 ? note.time : note.time * 1000;
+			const beijing = new Date(ms + 8 * 60 * 60 * 1000);
+			if (!isNaN(beijing.getTime())) {
+				published = beijing.toISOString().slice(0, 19);
+			}
+		}
+
+		// 站点名剥离 / Site name stripping
+		if (title) {
+			title = title.replace(/\s*[-|]\s*小红书\s*$/, '').trim();
+		}
+
+		return { title, author, published, content };
+	}
+
+	// 回退：INITIAL_STATE 解析失败时使用 defuddle（保持原有逻辑）
+	// Fallback: use defuddle when INITIAL_STATE parsing fails
 	const desc = doc.querySelector('#detail-desc');
 	const contentSelector = desc ? '#detail-desc' : '.note-content';
-	const result = convertHtmlToMarkdown(html, { url, contentSelector, doc });
+	return convertHtmlToMarkdown(html, { url, contentSelector, doc });
+}
+// ─── 知乎文章提取 / Zhihu article extraction ──────────────────────────────
 
-	// 图片补充 / Image supplement
-	const images = extractXiaohongshuImages(html);
-	if (images.length > 0 && result.content) {
-		result.content = result.content.trimEnd() + '\n' + images.map(u => `![](${u})`).join('\n') + '\n';
+// isZhihuUrl 已由 path-utils.ts 导出 / isZhihuUrl exported by path-utils.ts
+
+/**
+ * 知乎 .ContentItem-time 文本 → YYYY-MM-DDTHH:mm:ss（北京时间）
+ * Parse Zhihu .ContentItem-time text → YYYY-MM-DDTHH:mm:ss (Beijing time)
+ *
+ * 支持格式 / Supports: "发布于 2024-01-15 10:30" / "编辑于 2026-01-15 21:48"
+ * 参考 Share to Save content-converter.ts:834-842
+ */
+function parseZhihuContentItemTime(text: string): string | null {
+	const match = text.match(/(\d{4}-\d{2}-\d{2})\s*(\d{2}:\d{2})?/);
+	if (!match) return null;
+	const result = match[1] + 'T' + (match[2] ?? '00:00') + ':00';
+	const dt = new Date(result + '+08:00');
+	return isNaN(dt.getTime()) ? null : result;
+}
+
+// ── 知乎 DOM 预处理 / Zhihu DOM Preprocessing ─────────────────────────────
+
+/** 剥离知乎实体链接 a.RichContent-EntityWord → 纯文本 */
+function stripZhihuEntityLinks(doc: Document): void {
+	doc.querySelectorAll('a.RichContent-EntityWord').forEach(el => {
+		const text = el.textContent || '';
+		el.replaceWith(doc.createTextNode(text));
+	});
+}
+
+/** 移除知乎登录弹窗 */
+function removeZhihuLoginModals(doc: Document): void {
+	const selectors = ['.signFlowModal', '.Question-mainColumnLogin'];
+	selectors.forEach(sel => {
+		try { doc.querySelectorAll(sel).forEach(n => n.remove()); } catch { /* skip */ }
+	});
+}
+
+/** 判断文本是否像代码（用于代码块识别） */
+function isCodeLike(text: string): boolean {
+	return /^\s*(?:from\s+|import\s+|def\s+|class\s+|print\s*\(|#\s|if\s+|for\s+|while\s+|\w+\s*=\s*)/m.test(text)
+		|| (text.split('\n').length >= 3 && /[=){}\[\]]/.test(text));
+}
+
+/** 专栏代码块规范化：<th> 代码表 → <pre><code> */
+function normalizeTableCodeBlocks(doc: Document): void {
+	doc.querySelectorAll('table[data-draft-type="table"]').forEach(table => {
+		const cells = Array.from(table.querySelectorAll('th, td'))
+			.filter(cell => cell.closest('table') === table);
+		if (cells.length !== 1) return;
+
+		const cell = cells[0] as Element;
+		const html = cell.innerHTML;
+		const codeText = html
+			.replace(/<br\s*\/?>/gi, '\n')
+			.replace(/<[^>]+>/g, '')
+			.replace(/&amp;/g, '&');
+
+		if (!isCodeLike(codeText)) return;
+		if (!codeText.trim()) return;
+
+		const pre = doc.createElement('pre');
+		const code = doc.createElement('code');
+		code.textContent = codeText;
+		pre.appendChild(code);
+		table.replaceWith(pre);
+	});
+}
+
+/** 知乎专栏预处理：内容限定 + 代码块规范化 */
+function preprocessZhuanlan(doc: Document): void {
+	const article = doc.querySelector('article.Post-Main');
+	if (article) {
+		// "编辑于" 元素后兄弟节点移除（广告/推荐）
+		const editTime = article.querySelector('.ContentItem-time');
+		if (editTime) {
+			let sibling: ChildNode | null = editTime.nextSibling;
+			while (sibling) {
+				const next: ChildNode | null = sibling.nextSibling;
+				sibling.remove();
+				sibling = next;
+			}
+		}
+		doc.body.innerHTML = '';
+		doc.body.appendChild(article);
+	}
+	normalizeTableCodeBlocks(doc);
+}
+
+/** 定位知乎问答页回答正文容器（三层选择器回退） */
+function findAnswerContent(doc: Document): Element | null {
+	const selectors = [
+		'span.RichText.ztext',
+		'.RichContent-inner .RichText',
+		'.AnswerItem .RichText',
+	];
+	for (const sel of selectors) {
+		const el = doc.querySelector(sel);
+		if (el && el.textContent && el.textContent.length > 100) return el;
+	}
+	return null;
+}
+
+/** 问答代码块规范化：div.highlight 去包裹 */
+function normalizeHighlightCodeBlocks(doc: Document): void {
+	doc.querySelectorAll('div.highlight').forEach(highlight => {
+		const pre = highlight.querySelector('pre');
+		if (!pre) return;
+		const code = pre.querySelector('code');
+		if (!code) return;
+
+		// 语言类名从 code → pre，确保 defuddle 识别
+		const langClass = Array.from(code.classList).find(c => c.startsWith('language-'));
+		if (langClass && !pre.classList.contains(langClass)) {
+			pre.classList.add(langClass);
+		}
+		highlight.replaceWith(pre);
+	});
+}
+
+/** 懒加载图片修复：data-actualsrc → src */
+function normalizeZhihuLazyImages(doc: Document): void {
+	doc.querySelectorAll('img[data-actualsrc]').forEach(img => {
+		const actualSrc = img.getAttribute('data-actualsrc');
+		const currentSrc = img.getAttribute('src') || '';
+		if (actualSrc && (currentSrc.startsWith('data:') || !currentSrc)) {
+			img.setAttribute('src', actualSrc);
+		}
+	});
+}
+
+/** 知乎问答预处理：内容定位 + 代码块 + 懒加载图片 */
+function preprocessAnswer(doc: Document): void {
+	const answerContent = findAnswerContent(doc);
+	if (answerContent) {
+		// 保存发布时间到 answerContent 内（scoping 会丢弃其兄弟）
+		const timeEl = doc.querySelector('.ContentItem-time');
+		if (timeEl && timeEl.textContent?.trim()) {
+			const timeSpan = doc.createElement('span');
+			timeSpan.textContent = timeEl.textContent.trim();
+			answerContent.appendChild(timeSpan);
+		}
+		doc.body.innerHTML = '';
+		doc.body.appendChild(answerContent);
+	}
+	normalizeHighlightCodeBlocks(doc);
+	normalizeZhihuLazyImages(doc);
+}
+
+/**
+ * 知乎 DOM 预处理入口：根据 URL 类型分发
+ * Zhihu DOM preprocessing entry: dispatch by URL type
+ *
+ * 关键：.ContentItem-time 在 DOM 预处理前提取，预处理会将其移除
+ * CRITICAL: extract .ContentItem-time BEFORE preprocessing — preprocessing removes it
+ */
+function preprocessZhihuDom(doc: Document, url: string): string {
+	// 在预处理前提取发布时间 / Extract published time BEFORE preprocessing
+	let published = '';
+	const timeEl = doc.querySelector('.ContentItem-time');
+	if (timeEl?.textContent?.trim()) {
+		const parsed = parseZhihuContentItemTime(timeEl.textContent.trim());
+		if (parsed) published = parsed;
+	}
+
+	// 通用清理 / Shared cleanup
+	stripZhihuEntityLinks(doc);
+	removeZhihuLoginModals(doc);
+
+	// 按页面类型分发 / Dispatch by page type
+	if (/zhuanlan\.zhihu\.com/.test(url)) {
+		preprocessZhuanlan(doc);
+	} else {
+		preprocessAnswer(doc);
+	}
+
+	return published;
+}
+
+/**
+ * 知乎文章 HTML → Markdown
+ * Zhihu article HTML → Markdown
+ *
+ * 预处理 DOM（剥离实体链接、移除登录弹窗、代码块规范化、懒加载图片修复）
+ * 然后通过 defuddle 转换
+ * Preprocess DOM (strip entity links, remove login modals, normalize code blocks,
+ * fix lazy images), then convert via defuddle
+ *
+ * 参考 Share to Save content-converter.ts ZhihuConverter (lines 687-932)
+ */
+export function convertZhihuHtmlToMarkdown(html: string, url?: string): HtmlToMdResult {
+	const parser = new DOMParser();
+	const doc = parser.parseFromString(html, 'text/html');
+
+	// DOM 预处理（同时返回预处理前提取的发布时间）
+	// DOM preprocessing (returns published time extracted before preprocessing)
+	const zhihuPublished = preprocessZhihuDom(doc, url || '');
+
+	// 把预处理后的 DOM 序列化回 HTML，交给 defuddle
+	// Serialize preprocessed DOM back to HTML for defuddle
+	const processedHtml = doc.documentElement.outerHTML;
+	const result = convertHtmlToMarkdown(processedHtml, { url });
+
+	// 知乎发布时间优先于 enhanceMetadata 的通用提取
+	// Zhihu published takes priority over generic enhanceMetadata extraction
+	if (zhihuPublished && !result.published) {
+		result.published = zhihuPublished;
 	}
 
 	return result;
 }
+

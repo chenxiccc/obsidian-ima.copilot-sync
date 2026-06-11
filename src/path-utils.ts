@@ -33,10 +33,16 @@ export function createNamingContext(titleBase?: string): ImageNamingContext {
 
 /** 清理文件名中的非法字符 / Sanitize illegal characters in filename */
 export function sanitizeFilename(name: string): string {
-	return name
+	let result = name
 		.replace(/[/\\:*?"<>|#^[\]]/g, '_')
 		.replace(/\s+/g, ' ')
 		.trim();
+	// 去除首尾点号和空格（Windows 兼容）/ Strip leading/trailing dots and spaces (Windows compat)
+	// 参考 Share to Save text-utils.ts:89-101 / Ref: Share to Save text-utils.ts:89-101
+	result = result.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');
+	// 空值回退 / Empty fallback
+	if (!result) result = 'untitled';
+	return result;
 }
 
 /** 清理标题为安全文件名片段（空格→连字符，特殊字符→下划线）/ Sanitize title for filename segment (spaces→hyphens, special chars→underscores) */

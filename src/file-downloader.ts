@@ -216,8 +216,29 @@ export class FileDownloader {
 	/**
 	 * 通过 Node.js https.get 获取数据 Buffer（桌面端兜底共享实现）
 	 * Fetch data Buffer via Node.js https.get (shared desktop fallback implementation)
+	 *
+	 * 网络错误 / 超时 / 429 / 5xx → 最多重试 2 次（1s/2s 指数退避），参考 Scrapling 策略。
+	 * 4xx（非 429）不重试——客户端错误重试无意义。
+	 * 重定向递归跟随，上限 5 次。
+	 * Network error / timeout / 429 / 5xx → up to 2 retries (1s/2s backoff), ref: Scrapling.
+	 * 4xx (non-429) not retried — client errors won't resolve on retry.
+	 * Redirects followed recursively, max 5.
+	 *
+	 * 参考 Share to Save downloader.ts:331-416 / Ref: Share to Save downloader.ts:331-416
 	 */
-	private nodeHttpsGetBuffer(url: string, headers: Record<string, string>): Promise<{ buffer: Buffer; contentType: string }> {
+	private nodeHttpsGetBuffer(
+		url: string,
+		headers: Record<string, string>,
+		retryCount = 0,
+		redirectCount = 0,
+	): Promise<{ buffer: Buffer; contentType: string }> {
+		const MAX_RETRIES = 2;
+		const MAX_REDIRECTS = 5;
+
+		if (redirectCount >= MAX_REDIRECTS) {
+			return Promise.reject(new Error(`重定向次数过多 / Too many redirects (${MAX_REDIRECTS})`));
+		}
+
 		// 根据协议动态选择模块，支持 HTTP 和 HTTPS（参考 Share to Save image-handler.ts:370-372）
 		// Select module by protocol, support both HTTP and HTTPS (ref: Share to Save image-handler.ts:370-372)
 		const protocol = new URL(url).protocol === 'http:' ? 'http' : 'https';
@@ -225,17 +246,61 @@ export class FileDownloader {
 		const mod = require(protocol) as typeof import('https');
 
 		return new Promise<{ buffer: Buffer; contentType: string }>((resolve, reject) => {
-			const req = mod.get(url, { headers }, (res) => {
-				if (!res.statusCode || res.statusCode >= 400) {
-					reject(new Error(`HTTP ${res.statusCode}`));
-					return;
+			// 重试辅助函数，防重复触发 / Retry helper with dedup guard
+			let settled = false;
+			const retry = (reason: string) => {
+				if (settled) return;
+				settled = true;
+				if (retryCount < MAX_RETRIES) {
+					const delay = (retryCount + 1) * 1000;  // 指数退避 1s, 2s / exponential backoff
+					console.warn(
+						`ima.copilot Sync: Node.js 下载重试 ${retryCount + 1}/${MAX_RETRIES}（${delay}ms 后）: ${reason} — ${url.substring(0, 100)}`,
+					);
+					window.setTimeout(() => {
+						this.nodeHttpsGetBuffer(url, headers, retryCount + 1, redirectCount)
+							.then(resolve)
+							.catch(reject);
+					}, delay);
+				} else {
+					console.warn(`ima.copilot Sync: Node.js 下载重试耗尽 (${MAX_RETRIES}): ${reason} — ${url.substring(0, 100)}`);
+					reject(new Error(`下载重试耗尽 / Retries exhausted: ${reason}`));
 				}
-				if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-					this.nodeHttpsGetBuffer(res.headers.location, headers)
+			};
+
+			const req = mod.get(url, { headers }, (res) => {
+				// 处理重定向（含相对路径解析）/ Handle redirect (with relative URL resolution)
+				if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+					res.resume();  // 排空响应体 / Drain response body
+					const redirectUrl = new URL(res.headers.location, url).toString();
+					this.nodeHttpsGetBuffer(redirectUrl, headers, retryCount, redirectCount + 1)
 						.then(resolve)
 						.catch(reject);
 					return;
 				}
+
+				const sc = res.statusCode || 0;
+
+				// 限流 — 可重试 / Rate limited — retryable (ref: Scrapling BLOCKED_CODES)
+				if (sc === 429) {
+					res.resume();
+					retry(`HTTP 429 Too Many Requests`);
+					return;
+				}
+
+				// 服务端错误 — 可重试 / Server error — retryable (ref: Scrapling BLOCKED_CODES)
+				if (sc >= 500) {
+					res.resume();
+					retry(`HTTP ${sc} Server Error`);
+					return;
+				}
+
+				// 客户端错误 — 不重试 / Client error — terminal (ref: Scrapling BLOCKED_CODES)
+				if (sc >= 400) {
+					res.resume();
+					reject(new Error(`HTTP ${sc}`));
+					return;
+				}
+
 				// 捕获 Content-Type 用于后续扩展名修正（参考 Share to Save image-handler.ts:388）
 				// Capture Content-Type for later extension correction (ref: Share to Save image-handler.ts:388)
 				const contentType = res.headers['content-type'] ?? '';
@@ -248,12 +313,13 @@ export class FileDownloader {
 					}
 					resolve({ buffer, contentType });
 				});
-				res.on('error', reject);
+				res.on('error', () => retry('response stream error'));
 			});
-			req.on('error', reject);
+
+			req.on('error', (err: Error) => retry(`network error: ${err.message}`));
 			req.setTimeout(60_000, () => {
 				req.destroy();
-				reject(new Error('下载超时 / Download timeout'));
+				retry('下载超时 / Download timeout');
 			});
 		});
 	}
