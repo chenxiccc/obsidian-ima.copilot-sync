@@ -1029,9 +1029,16 @@ export class SyncManager {
 		}
 
 		if (published) {
-			const formatted = this.formatDateTime(published);
-			if (formatted) {
-				lines.push(`published: ${formatted}`);
+			// 已是标准 ISO 日期时间格式（含/不含时区），直接使用，不转 UTC
+			// Already in standard ISO datetime format (with/without timezone), use as-is
+			const isoRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2})?$/;
+			if (isoRe.test(published)) {
+				lines.push(`published: ${published.replace(/[+-]\d{2}:\d{2}$/, '')}`);
+			} else {
+				const formatted = this.formatDateTime(published);
+				if (formatted) {
+					lines.push(`published: ${formatted}`);
+				}
 			}
 		}
 
