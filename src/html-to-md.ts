@@ -960,11 +960,72 @@ function stripZhihuEntityLinks(doc: Document): void {
 	});
 }
 
-/** 移除知乎登录弹窗 */
+/** 移除知乎登录弹窗 / Remove Zhihu login modals */
 function removeZhihuLoginModals(doc: Document): void {
 	const selectors = ['.signFlowModal', '.Question-mainColumnLogin'];
 	selectors.forEach(sel => {
 		try { doc.querySelectorAll(sel).forEach(n => n.remove()); } catch { /* skip */ }
+	});
+}
+
+/**
+ * 移除知乎噪声元素：热榜、广告、推荐阅读（安全网，覆盖 sibling 遍历未能处理的场景）
+ * Remove Zhihu noise elements: hot list, ads, recommended reading
+ * (safety net for cases where sibling traversal misses nested elements)
+ */
+function removeZhihuNoiseElements(doc: Document): void {
+	// 热榜 / Hot search list
+	const hotSelectors = [
+		'.HotSearchCard', '.HotSearchCard-list', '.HotSearchCard-header',
+		'.HotSearchCard-title', '.HotSearchCard-change', '.HotSearchCard-item',
+		'.HotSearchCard-itemLink', '.HotSearchCard-heat',
+	];
+	// 广告容器 / Ad containers
+	const adSelectors = [
+		'.pc-article-answer-big-img', '.pc-article-answer-text-chain',
+	];
+	// 推荐阅读 / Recommended reading
+	const recSelectors = ['.Recommendations-Main', '.Post-Sub', '.Post-NormalSub'];
+
+	const allSelectors = [...hotSelectors, ...adSelectors, ...recSelectors];
+	allSelectors.forEach(sel => {
+		try { doc.querySelectorAll(sel).forEach(n => n.remove()); } catch { /* skip */ }
+	});
+}
+
+/**
+ * 知乎 DOM 加粗元素规范化：扁平化嵌套 + bold 后补空格
+ * Zhihu DOM bold element normalization: flatten nesting + space after bold
+ *
+ * 防止 Defuddle 输出 **text**nextChar 导致 Obsidian Live Preview 无法识别关闭 ** 分隔符
+ * Prevents **text**nextChar in Defuddle output from breaking Obsidian Live Preview delimiter recognition
+ *
+ * 参考 Share to Save text-utils.ts:264-289 normalizeBoldElements
+ */
+function normalizeZhihuBoldElements(doc: Document): void {
+	// a. 扁平化嵌套的 strong/b 标签 / Flatten nested strong/b tags
+	doc.querySelectorAll('strong strong, strong b, b strong, b b').forEach(el => {
+		const parent = el.parentNode;
+		if (!parent) return;
+		while (el.firstChild) parent.insertBefore(el.firstChild, el);
+		el.remove();
+	});
+	// b. 确保 bold 结束标签后有空格 / Ensure space after bold closing tag
+	doc.querySelectorAll('strong, b').forEach(el => {
+		const next = el.nextSibling;
+		if (!next) return;
+		// 文本节点：检查是否以非空白开头 / Text node: check if starts with non-whitespace
+		if (next.nodeType === 3) {
+			const text = next.textContent || '';
+			if (text && !/^\s/.test(text)) {
+				next.textContent = ' ' + text;
+			}
+			return;
+		}
+		// 元素节点：el.nextSibling === next 表示中间没有文本节点 / no text node between
+		if (next.nodeType === 1 && el.nextSibling === next) {
+			el.parentNode?.insertBefore(doc.createTextNode(' '), next);
+		}
 	});
 }
 
@@ -1098,6 +1159,8 @@ function preprocessZhihuDom(doc: Document, url: string): string {
 	// 通用清理 / Shared cleanup
 	stripZhihuEntityLinks(doc);
 	removeZhihuLoginModals(doc);
+	removeZhihuNoiseElements(doc);
+	normalizeZhihuBoldElements(doc);
 
 	// 按页面类型分发 / Dispatch by page type
 	if (/zhuanlan\.zhihu\.com/.test(url)) {
@@ -1110,13 +1173,135 @@ function preprocessZhihuDom(doc: Document, url: string): string {
 }
 
 /**
+ * 从知乎 SSR 数据中提取回答的发布时间（Unix 秒 → ISO 字符串）
+ * Extract answer publish time from Zhihu SSR data (Unix seconds → ISO string)
+ *
+ * 知乎问答页不含 .ContentItem-time 元素，但发布时间嵌入在
+ * <script id="js-initialData" type="text/json"> 的 SSR JSON 中：
+ * entities.answers["<answerId>"].createdTime = Unix 秒时间戳
+ *
+ * Zhihu answer pages lack .ContentItem-time, but publish time is embedded
+ * in SSR JSON inside <script id="js-initialData" type="text/json">:
+ * entities.answers["<answerId>"].createdTime = Unix seconds timestamp
+ *
+ * @returns ISO datetime string (UTC)，失败返回 null / ISO datetime string (UTC), null on failure
+ */
+function extractZhihuSsrAnswerCreatedTime(html: string, url: string): string | null {
+	const answerMatch = url.match(/\/answer\/(\d+)/);
+	const answerId = answerMatch?.[1];
+	if (!answerId) return null;
+
+	const ssrMatch = html.match(/<script[^>]*id="js-initialData"[^>]*>([\s\S]*?)<\/script>/i);
+	if (!ssrMatch?.[1]) return null;
+
+	try {
+		const ssrData = JSON.parse(ssrMatch[1]) as Record<string, unknown>;
+		const initialState = ssrData?.initialState as Record<string, unknown> | undefined;
+		const entities = initialState?.entities as Record<string, unknown> | undefined;
+		const answers = entities?.answers as Record<string, Record<string, unknown>> | undefined;
+		const answer = answers?.[answerId];
+		const createdTime = answer?.createdTime;
+		if (typeof createdTime === 'number' && createdTime > 0) {
+			const date = new Date(createdTime * 1000);
+			if (!isNaN(date.getTime())) {
+				return date.toISOString().slice(0, 19);
+			}
+		}
+	} catch { /* SSR JSON 解析失败或结构不匹配 */ }
+
+	return null;
+}
+
+/**
+ * 从知乎 SSR 数据中提取回答的发布时间，格式化为北京时间显示文本
+ * Extract answer publish time from Zhihu SSR data, format as Beijing-time display text
+ *
+ * @returns "发布于 YYYY-MM-DD HH:mm" 格式，失败返回 null / "发布于 YYYY-MM-DD HH:mm" format, null on failure
+ */
+function formatZhihuSsrTimeForBody(html: string, url: string): string | null {
+	const answerMatch = url.match(/\/answer\/(\d+)/);
+	const answerId = answerMatch?.[1];
+	if (!answerId) return null;
+
+	const ssrMatch = html.match(/<script[^>]*id="js-initialData"[^>]*>([\s\S]*?)<\/script>/i);
+	if (!ssrMatch?.[1]) return null;
+
+	try {
+		const ssrData = JSON.parse(ssrMatch[1]) as Record<string, unknown>;
+		const createdTime = (ssrData as Record<string, unknown>)?.initialState as Record<string, unknown> | undefined;
+		const entities = createdTime?.entities as Record<string, unknown> | undefined;
+		const answers = entities?.answers as Record<string, Record<string, unknown>> | undefined;
+		const answer = answers?.[answerId];
+		const createdTs = answer?.createdTime;
+		const updatedTs = answer?.updatedTime;
+		// 有编辑记录 → "编辑于 updatedTime"，否则 → "发布于 createdTime"
+		// Edited → "编辑于 updatedTime", otherwise → "发布于 createdTime"
+		const isEdited = typeof updatedTs === 'number' && typeof createdTs === 'number' && updatedTs !== createdTs;
+		const ts = isEdited ? updatedTs : createdTs;
+		if (typeof ts === 'number' && ts > 0) {
+			// Unix 秒 → 北京时间（UTC+8）/ Unix seconds → Beijing time (UTC+8)
+			const date = new Date((ts + 8 * 3600) * 1000);
+			const y = date.getUTCFullYear();
+			const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+			const d = String(date.getUTCDate()).padStart(2, '0');
+			const h = String(date.getUTCHours()).padStart(2, '0');
+			const mi = String(date.getUTCMinutes()).padStart(2, '0');
+			// IP 归属地 / IP location（如 "浙江", "北京", "广西"）
+			const ipInfo = answer?.ipInfo;
+			const location = typeof ipInfo === 'string' && ipInfo ? `・${ipInfo}` : '';
+			const prefix = isEdited ? '编辑于' : '发布于';
+			return `${prefix} ${y}-${mo}-${d} ${h}:${mi}${location}`;
+		}
+	} catch { /* ignore */ }
+
+	return null;
+}
+
+/**
+ * 折叠知乎 Markdown 链接文本中的换行为空格
+ * Collapse newlines in Zhihu Markdown link text to spaces
+ *
+ * 当 Defuddle 遇到 <a><p>text</p></a> 时（<p> 被 flattenWrapperElements 展开），
+ * 会产生 [\n\ntext\n\n](url) 断裂链接。此函数折叠链接文本中的空白为单行。
+ * When Defuddle encounters <a><p>text</p></a> (<p> expanded by flattenWrapperElements),
+ * it produces [\n\ntext\n\n](url) broken links. This collapses whitespace to single line.
+ *
+ * 参考 Share to Save text-utils.ts:307-318 normalizeMultilineLinks
+ */
+function collapseZhihuMultilineLinks(md: string): string {
+	// 快速路径：没有紧跟在 [ 之后的换行 → 不存在断裂链接 / no broken links
+	if (!/\[\s*\n/.test(md)) return md;
+
+	return md.replace(
+		/\[([^\]]*\n[^\]]*)\]\(([^)\n]+)\)/g,
+		(_full: string, text: string, url: string) => {
+			const cleaned = text.replace(/\s+/g, ' ').trim();
+			return `[${cleaned}](${url})`;
+		}
+	);
+}
+
+/**
  * 知乎文章 HTML → Markdown
  * Zhihu article HTML → Markdown
  *
- * 预处理 DOM（剥离实体链接、移除登录弹窗、代码块规范化、懒加载图片修复）
- * 然后通过 defuddle 转换
- * Preprocess DOM (strip entity links, remove login modals, normalize code blocks,
- * fix lazy images), then convert via defuddle
+ * 架构对齐 Share to Save ZhihuConverter.convert()：
+ * 1. DOMParser → doc
+ * 2. unwrapBlockChildrenInLinks（共享 DOM 预处理，同 convertHtmlToMarkdown）
+ * 3. preprocessZhihuDom（知乎 DOM 预处理：实体链接剥离 + 登录弹窗移除 + 噪声清理 +
+ *    bold 规范化 + zhuanlan/answer 分叉 + 发布时间提取）
+ * 4. 同一 doc 直接交 Defuddle（无重解析，对齐 share-to-save）
+ * 5. enhanceMetadata（共享后处理：Schema.org JSON-LD + 站点名剥离）
+ * 6. collapseZhihuMultilineLinks（折叠断裂链接文本）
+ *
+ * Architecture aligned with Share to Save ZhihuConverter.convert():
+ * 1. DOMParser → doc
+ * 2. unwrapBlockChildrenInLinks (shared DOM preprocessing, same as convertHtmlToMarkdown)
+ * 3. preprocessZhihuDom (Zhihu DOM preprocessing: entity link stripping + login modal removal +
+ *    noise cleanup + bold normalization + zhuanlan/answer dispatch + publish time extraction)
+ * 4. Same doc goes directly to Defuddle (no re-parse, aligned with share-to-save)
+ * 5. enhanceMetadata (shared post-processing: Schema.org JSON-LD + site name stripping)
+ * 6. collapseZhihuMultilineLinks (collapse broken link text)
  *
  * 参考 Share to Save content-converter.ts ZhihuConverter (lines 687-932)
  */
@@ -1124,21 +1309,62 @@ export function convertZhihuHtmlToMarkdown(html: string, url?: string): HtmlToMd
 	const parser = new DOMParser();
 	const doc = parser.parseFromString(html, 'text/html');
 
-	// DOM 预处理（同时返回预处理前提取的发布时间）
-	// DOM preprocessing (returns published time extracted before preprocessing)
+	// 1. 共享 DOM 预处理（同 convertHtmlToMarkdown 内部操作）
+	// Shared DOM preprocessing (same as convertHtmlToMarkdown internals)
+	unwrapBlockChildrenInLinks(doc);
+
+	// 2. 知乎 DOM 预处理（返回预处理前提取的发布时间）
+	// Zhihu DOM preprocessing (returns published time extracted before preprocessing)
 	const zhihuPublished = preprocessZhihuDom(doc, url || '');
 
-	// 把预处理后的 DOM 序列化回 HTML，交给 defuddle
-	// Serialize preprocessed DOM back to HTML for defuddle
-	const processedHtml = doc.documentElement.outerHTML;
-	const result = convertHtmlToMarkdown(processedHtml, { url });
+	// 3. 同一 doc 直接交 Defuddle（无重解析！对齐 share-to-save 架构）
+	// Same doc goes directly to Defuddle (no re-parse! Aligned with share-to-save architecture)
+	const result = new Defuddle(doc, { url, markdown: true, useAsync: false }).parse();
 
-	// 知乎发布时间优先于 enhanceMetadata 的通用提取
-	// Zhihu published takes priority over generic enhanceMetadata extraction
-	if (zhihuPublished && !result.published) {
-		result.published = zhihuPublished;
+	// 4. 知乎发布时间提取（三级回退）
+	//    Tier 1: .ContentItem-time DOM 元素（专栏页）
+	//    Tier 2: SSR #js-initialData → entities.answers[<id>].createdTime（问答页）
+	//    Tier 3: Defuddle 通用提取（meta 标签 / Schema.org）
+	// Zhihu publish time extraction (three-tier fallback)
+	//    Tier 1: .ContentItem-time DOM element (zhuanlan pages)
+	//    Tier 2: SSR #js-initialData → entities.answers[<id>].createdTime (answer pages)
+	//    Tier 3: Defuddle generic extraction (meta tags / Schema.org)
+	let published = result.published ?? '';
+	if (zhihuPublished && !published) {
+		published = zhihuPublished;
+	}
+	// 问答页没有 .ContentItem-time，尝试从 SSR 数据提取
+	// Answer pages lack .ContentItem-time, try SSR extraction
+	if (!published) {
+		const ssrTime = extractZhihuSsrAnswerCreatedTime(html, url || '');
+		if (ssrTime) published = ssrTime;
 	}
 
-	return result;
+	const mdResult: HtmlToMdResult = {
+		title: result.title ?? '',
+		author: result.author ?? '',
+		published,
+		content: result.content ?? '',
+	};
+
+	// 5. 共享后处理（Schema.org JSON-LD + 站点名剥离 + 作者/published 兜底）
+	// Shared post-processing (Schema.org JSON-LD + site name stripping + author/published fallback)
+	const enhanced = enhanceMetadata(mdResult, html, doc);
+
+	// 6. 折叠知乎多行链接文本 / Collapse Zhihu multiline link text
+	enhanced.content = collapseZhihuMultilineLinks(enhanced.content);
+
+	// 7. 问答页追加重构的时间行（问答页没有 .ContentItem-time DOM 元素，
+	//    专栏页的 .ContentItem-time 已在 article 内自然保留）
+	// Append reconstructed time line for answer pages (answer pages lack .ContentItem-time,
+	// zhuanlan pages already have it preserved inside the article)
+	if (!/(?:发布于|编辑于)/.test(enhanced.content)) {
+		const timeLine = formatZhihuSsrTimeForBody(html, url || '');
+		if (timeLine) {
+			enhanced.content = enhanced.content + '\n\n' + timeLine + '\n';
+		}
+	}
+
+	return enhanced;
 }
 

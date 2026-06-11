@@ -322,7 +322,7 @@ export function isXiaohongshuUrl(url: string): boolean {
 
 /** 检测是否为知乎页面（专栏/问答/想法/回答）/ Check if it's a Zhihu page (column/Q&A/pin/answer) */
 export function isZhihuUrl(url: string): boolean {
-	return /zhihu\.com\/(question|zhuanlan|pin|answer)/.test(url);
+	return /zhihu\.com\/(question|zhuanlan|pin|answer|p)/.test(url);
 }
 
 /** 内容获取策略站点分类 / Content acquisition strategy site classification */
