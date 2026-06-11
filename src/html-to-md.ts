@@ -1173,20 +1173,25 @@ function preprocessZhihuDom(doc: Document, url: string): string {
 }
 
 /**
- * 从知乎 SSR 数据中提取回答的发布时间（Unix 秒 → ISO 字符串）
- * Extract answer publish time from Zhihu SSR data (Unix seconds → ISO string)
+ * 从知乎 SSR 数据中提取回答的发布时间（Unix 秒 → 北京时间 ISO 字符串）
+ * Extract answer publish time from Zhihu SSR data (Unix seconds → Beijing-time ISO string)
  *
  * 知乎问答页不含 .ContentItem-time 元素，但发布时间嵌入在
  * <script id="js-initialData" type="text/json"> 的 SSR JSON 中：
- * entities.answers["<answerId>"].createdTime = Unix 秒时间戳
+ * entities.answers["<answerId>"].createdTime / .updatedTime = Unix 秒时间戳
  *
  * Zhihu answer pages lack .ContentItem-time, but publish time is embedded
  * in SSR JSON inside <script id="js-initialData" type="text/json">:
- * entities.answers["<answerId>"].createdTime = Unix seconds timestamp
+ * entities.answers["<answerId>"].createdTime / .updatedTime = Unix seconds timestamp
  *
- * @returns ISO datetime string (UTC)，失败返回 null / ISO datetime string (UTC), null on failure
+ * 与专栏页 parseZhihuContentItemTime 保持一致：返回北京时间无时区后缀。
+ * 有编辑记录时取 updatedTime（匹配「编辑于」），否则取 createdTime（匹配「发布于」）。
+ * Consistent with zhuanlan parseZhihuContentItemTime: returns Beijing time without timezone.
+ * Uses updatedTime when edited (matches "编辑于"), otherwise createdTime (matches "发布于").
+ *
+ * @returns "YYYY-MM-DDTHH:mm:ss" 北京时间，失败返回 null / Beijing time string, null on failure
  */
-function extractZhihuSsrAnswerCreatedTime(html: string, url: string): string | null {
+function extractZhihuSsrAnswerPublishedTime(html: string, url: string): string | null {
 	const answerMatch = url.match(/\/answer\/(\d+)/);
 	const answerId = answerMatch?.[1];
 	if (!answerId) return null;
@@ -1200,11 +1205,22 @@ function extractZhihuSsrAnswerCreatedTime(html: string, url: string): string | n
 		const entities = initialState?.entities as Record<string, unknown> | undefined;
 		const answers = entities?.answers as Record<string, Record<string, unknown>> | undefined;
 		const answer = answers?.[answerId];
-		const createdTime = answer?.createdTime;
-		if (typeof createdTime === 'number' && createdTime > 0) {
-			const date = new Date(createdTime * 1000);
+		const createdTs = answer?.createdTime;
+		const updatedTs = answer?.updatedTime;
+		// 有编辑记录取 updatedTime，否则取 createdTime
+		// Use updatedTime when edited, otherwise createdTime
+		const isEdited = typeof updatedTs === 'number' && typeof createdTs === 'number' && updatedTs !== createdTs;
+		const ts = isEdited ? updatedTs : createdTs;
+		if (typeof ts === 'number' && ts > 0) {
+			// Unix 秒（UTC）→ 北京时间 / Unix seconds (UTC) → Beijing time
+			const date = new Date((ts + 8 * 3600) * 1000);
 			if (!isNaN(date.getTime())) {
-				return date.toISOString().slice(0, 19);
+				const y = date.getUTCFullYear();
+				const mo = String(date.getUTCMonth() + 1).padStart(2, '0');
+				const d = String(date.getUTCDate()).padStart(2, '0');
+				const h = String(date.getUTCHours()).padStart(2, '0');
+				const mi = String(date.getUTCMinutes()).padStart(2, '0');
+				return `${y}-${mo}-${d}T${h}:${mi}:00`;
 			}
 		}
 	} catch { /* SSR JSON 解析失败或结构不匹配 */ }
@@ -1336,7 +1352,7 @@ export function convertZhihuHtmlToMarkdown(html: string, url?: string): HtmlToMd
 	// 问答页没有 .ContentItem-time，尝试从 SSR 数据提取
 	// Answer pages lack .ContentItem-time, try SSR extraction
 	if (!published) {
-		const ssrTime = extractZhihuSsrAnswerCreatedTime(html, url || '');
+		const ssrTime = extractZhihuSsrAnswerPublishedTime(html, url || '');
 		if (ssrTime) published = ssrTime;
 	}
 
