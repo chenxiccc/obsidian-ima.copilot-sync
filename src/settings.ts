@@ -174,6 +174,18 @@ export class ImaSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		// ── 移动端提示（非桌面端显示）/ Mobile notice (shown on non-desktop) ──
+		if (!Platform.isDesktop) {
+			const noticeBox = containerEl.createDiv({ cls: 'ima-mobile-notice' });
+			noticeBox.createEl('p', {
+				text: '📢 强烈建议在桌面端使用。桌面端独有的「下载增强」功能可显著提升微信公众号内容和防盗链图片的下载成功率。',
+			});
+			noticeBox.createEl('p', {
+				text: '📢 Strongly recommended to use on desktop. The desktop-exclusive "Download Enhancement" feature significantly improves the download success rate for WeChat public account content and anti-hotlink images.',
+				cls: 'ima-mobile-notice--en',
+			});
+		}
+
 		new Setting(containerEl).setName('同步设置').setHeading();
 
 		// ── 认证凭证（灰色分组框）/ Credentials (grouped box) ─────────────────

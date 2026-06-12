@@ -133,6 +133,26 @@
 	display: none;
 }
 
+/* ── 移动端提示框（设置页顶部，仅非桌面端显示）/ Mobile notice box (top of settings page, non-desktop only) ── */
+.ima-mobile-notice {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 12px 16px;
+	margin-bottom: 16px;
+}
+
+.ima-mobile-notice p {
+	margin: 0;
+	font-size: 0.9em;
+	line-height: 1.5;
+}
+
+.ima-mobile-notice--en {
+	margin-top: 6px;
+	color: var(--text-muted);
+}
+
 /* ── Ribbon 同步图标：空闲 panda / 同步 refresh-cw 旋转 / Ribbon icon: panda idle / refresh-cw spinning when syncing ── */
 
 /* 默认：显示 panda，隐藏 refresh-cw / Default: show panda, hide refresh-cw */
