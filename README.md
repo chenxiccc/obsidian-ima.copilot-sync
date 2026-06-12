@@ -175,3 +175,7 @@ npm run build
 ### License
 
 MIT
+
+---
+
+This project includes [defuddle](https://github.com/kepano/defuddle) (MIT) by Steph Ango (@kepano), used for HTML-to-Markdown conversion.
