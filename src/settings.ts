@@ -299,8 +299,16 @@ export class ImaSettingTab extends PluginSettingTab {
 						btn.setButtonText('测试中…');
 						try {
 							const client = new ImaClient(clientId, apiKey);
-							const notes = await client.listAllNotes();
-							new Notice(`连接成功，共找到 ${notes.length} 篇笔记`);
+							// 仅探测连通性，不遍历全部笔记，避免触发网关限频 (200001)
+							// Probe connectivity only, do not fetch all notes, avoid gateway rate limit (200001)
+							// 加 15s 超时兜底：postOnce 不退避，但网络慢时仍可能久卡，超时给出明确提示
+							// 15s timeout fallback: postOnce has no backoff, but a slow network may still hang;
+							// the timeout gives a clear message instead of an indefinite "测试中…"
+							const timeout = new Promise<never>((_, reject) =>
+								window.setTimeout(() => reject(new Error('测试连接超时（15s），请检查网络后重试 / Test connection timed out (15s), check network and retry')), 15_000),
+							);
+							await Promise.race([client.testConnection(), timeout]);
+							new Notice('连接成功');
 						} catch (err) {
 							new Notice(`连接失败：${formatImaError(err)}`);
 						} finally {

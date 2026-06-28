@@ -135,10 +135,23 @@ export class ImaApiError extends Error {
 	}
 }
 
+// 限频错误码集合（网关 200001 / notes 20002 / wiki 110021）：post 退避重试与 formatImaError 提示共用，避免双源维护
+// Rate-limit code set (gateway 200001 / notes 20002 / wiki 110021): shared by post backoff retry and formatImaError messaging to avoid dual-source maintenance
+const RATE_LIMIT_CODES = new Set([200001, 20002, 110021]);
+
 /** 格式化错误消息用于用户展示 / Format error message for user display */
 export function formatImaError(err: unknown): string {
-	if (err instanceof ImaApiError && err.code === 200002) {
-		return 'API Key已过期，请到 ima客户端→Claw设置 进行一键续期';
+	if (err instanceof ImaApiError) {
+		// 200002：鉴权失败 / API Key 过期，引导用户续期
+		// 200002: auth failed / API Key expired, guide user to renew
+		if (err.code === 200002) {
+			return 'API Key已过期，请到 ima客户端→Claw设置 进行一键续期';
+		}
+		// 限频码：已退避重试耗尽仍被限，提示稍后重试，并保留服务器原始 msg 便于排障
+		// Rate-limit codes: backoff exhausted, prompt to retry later, keeping the server's original msg for debugging
+		if (RATE_LIMIT_CODES.has(err.code)) {
+			return `请求频率超限，请稍后重试（${err.message}）`;
+		}
 	}
 	return err instanceof Error ? err.message : String(err);
 }
@@ -154,6 +167,19 @@ export class ImaClient {
 	private debugPath = '';
 	private debugAdapter: DataAdapter | null = null;
 	private debugEnabled = false;
+
+	// ── 限频保护 / Rate-limit protection ───────────────────────────────────
+	// 全局节流：任意两次 openapi 请求之间至少间隔 MIN_REQUEST_INTERVAL_MS
+	// Global throttle: at least MIN_REQUEST_INTERVAL_MS between any two openapi requests
+	private static readonly MIN_REQUEST_INTERVAL_MS = 200;
+	// 退避梯度：10s → 30s → 90s（限频命中后等窗口充分冷却再重试，避免反复撞墙）
+	// Backoff schedule: 10s → 30s → 90s (let the rate-limit window cool down fully before retry, avoid repeated hits)
+	private static readonly RATE_LIMIT_BACKOFF_MS = [10_000, 30_000, 90_000];
+	// 链路层未知错误码（JSON 解析失败 / 非 JSON 响应 / 缺 data 字段等），区别于业务码
+	// Link-layer unknown error code (JSON parse failure / non-JSON response / missing data field etc.), distinct from business codes
+	private static readonly UNKNOWN_ERROR_CODE = -1;
+	// 上次请求完成的时间戳，用于节流 / Last request completion timestamp, for throttling
+	private lastRequestTime = 0;
 
 	constructor(
 		private readonly clientId: string,
@@ -178,34 +204,139 @@ export class ImaClient {
 		void this.debugAdapter.append(this.debugPath, line);
 	}
 
-	/** 通用 POST 请求 / Generic POST request */
-	private async post<T>(path: string, body: unknown): Promise<T> {
-		const response = await requestUrl({
-			url: `${BASE_URL}/${path}`,
-			method: 'POST',
-			headers: {
-				'ima-openapi-clientid': this.clientId,
-				'ima-openapi-apikey': this.apiKey,
-				'Content-Type': 'application/json',
-			},
-			body: JSON.stringify(body),
-			throw: false,
-		});
+	/**
+	 * 单次 POST 请求（含全局节流，不含退避重试）/ Single POST request (with global throttle, no backoff retry)
+	 *
+	 * 解析响应并校验：非 JSON / 非 200 / 业务码非 0 均抛 ImaApiError，由调用方决定是否重试
+	 * Parses and validates the response: non-JSON / non-200 / non-zero business code all throw ImaApiError;
+	 * the caller decides whether to retry
+	 */
+	private async postOnce<T>(path: string, body: unknown): Promise<T> {
+		// 全局节流：保证两次 openapi 请求间隔 ≥ MIN_REQUEST_INTERVAL_MS，避免突发尖峰触发限频
+		// Global throttle: ensure ≥ MIN_REQUEST_INTERVAL_MS between openapi requests to avoid burst rate-limiting
+		await this.throttle();
+
+		// requestUrl 的 throw:false 只压制 HTTP 4xx/5xx，不保证 JSON 解析成功
+		// （WAF 拦截会返回 HTML 重定向页，response.json 可能为 null/undefined）
+		// requestUrl's throw:false only suppresses HTTP 4xx/5xx, not JSON parse failures
+		// (WAF blocks return an HTML redirect page, response.json may be null/undefined)
+		let response;
+		try {
+			response = await requestUrl({
+				url: `${BASE_URL}/${path}`,
+				method: 'POST',
+				headers: {
+					'ima-openapi-clientid': this.clientId,
+					'ima-openapi-apikey': this.apiKey,
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(body),
+				throw: false,
+			});
+		} catch (err) {
+			// 网络层错误（超时、连接失败）包装成 ImaApiError，避免裸 Error 泄漏给用户
+			// Network-layer errors (timeout, connection failure) wrapped as ImaApiError to avoid leaking raw Errors
+			throw new ImaApiError(ImaClient.UNKNOWN_ERROR_CODE, `网络请求失败 / Network request failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 
 		// 调试：记录真实响应 / Debug: log raw response
 		this.debugLog(`status=${response.status} path=${path}`);
 		this.debugLog(`text=${response.text}`);
 
-		const result = response.json as ImaApiResponse<T>;
+		// 非 JSON 响应（WAF 拦截返回 HTML 等）：包装成 ImaApiError，避免 result.retcode 抛 TypeError
+		// Non-JSON response (WAF HTML etc.): wrap as ImaApiError to avoid TypeError on result.retcode
+		const result = response.json;
+		if (result === null || result === undefined || typeof result !== 'object') {
+			throw new ImaApiError(
+				ImaClient.UNKNOWN_ERROR_CODE,
+				`HTTP ${response.status} 非 JSON 响应 / non-JSON response (可能被 WAF 拦截，请检查网络或稍后重试)`,
+			);
+		}
+		const typed = result as ImaApiResponse<T>;
 
 		// 兼容两种响应格式：Notes API (code/msg) 和 Knowledge Base API (retcode/errmsg)
 		// Compatible with two response formats: Notes API (code/msg) and Knowledge Base API (retcode/errmsg)
-		const retcode = result.retcode ?? result.code ?? -1;
-		const errmsg = result.errmsg ?? result.msg ?? 'unknown error';
+		const retcode = typed.retcode ?? typed.code ?? ImaClient.UNKNOWN_ERROR_CODE;
+		const errmsg = typed.errmsg ?? typed.msg ?? 'unknown error';
+
 		if (retcode !== 0) {
 			throw new ImaApiError(retcode, errmsg);
 		}
-		return result.data;
+
+		// code=0 但缺 data 字段（意外空响应）：抛错避免下游解构 undefined
+		// code=0 but missing data field (unexpected empty response): throw to avoid undefined destructuring downstream
+		if (typed.data === undefined || typed.data === null) {
+			throw new ImaApiError(ImaClient.UNKNOWN_ERROR_CODE, '响应缺少 data 字段 / response missing data field');
+		}
+		return typed.data;
+	}
+
+	/**
+	 * 通用 POST 请求（全局节流 + 限频退避重试）/ Generic POST request (global throttle + rate-limit backoff)
+	 *
+	 * 命中限频码（200001/20002/110021）按梯度退避重试（10s → 30s → 90s），耗尽才抛出；其他错误立即抛出
+	 * On rate-limit codes (200001/20002/110021) retries with backoff (10s → 30s → 90s), throws only after exhausted;
+	 * other errors throw immediately
+	 */
+	private async post<T>(path: string, body: unknown): Promise<T> {
+		let attempt = 0;
+		// 循环重试：仅对限频码退避重试，其他错误由 postOnce 立即抛出
+		// Retry loop: only backoff on rate-limit codes; other errors throw immediately from postOnce
+		while (true) {
+			try {
+				return await this.postOnce<T>(path, body);
+			} catch (err) {
+				// 非限频码错误立即向上抛出 / Non-rate-limit errors propagate immediately
+				if (!(err instanceof ImaApiError) || !RATE_LIMIT_CODES.has(err.code)) {
+					throw err;
+				}
+				// 限频码但退避次数耗尽：抛出，由 formatImaError 转成用户提示
+				// Rate-limit code but backoff exhausted: throw, formatImaError turns it into a user-facing message
+				if (attempt >= ImaClient.RATE_LIMIT_BACKOFF_MS.length) {
+					throw err;
+				}
+				const backoff = ImaClient.RATE_LIMIT_BACKOFF_MS[attempt]!;
+				this.debugLog(`rate-limited (code=${err.code}), retry ${attempt + 1}/${ImaClient.RATE_LIMIT_BACKOFF_MS.length} after ${backoff}ms`);
+				await this.sleep(backoff);
+				attempt++;
+			}
+		}
+	}
+
+	/** 节流：若距上次请求不足 MIN_REQUEST_INTERVAL_MS，则 sleep 补足 / Throttle: sleep to fill the gap if too soon */
+	private async throttle(): Promise<void> {
+		const now = Date.now();
+		const elapsed = now - this.lastRequestTime;
+		if (elapsed < ImaClient.MIN_REQUEST_INTERVAL_MS) {
+			await this.sleep(ImaClient.MIN_REQUEST_INTERVAL_MS - elapsed);
+		}
+		this.lastRequestTime = Date.now();
+	}
+
+	/** Promise 化的 sleep / Promise-based sleep */
+	private sleep(ms: number): Promise<void> {
+		return new Promise(resolve => window.setTimeout(resolve, ms));
+	}
+
+	/**
+	 * 轻量探测：仅发一次 limit=1 请求验证凭证有效性，不遍历全部笔记
+	 * Lightweight probe: a single limit=1 request to verify credentials, without fetching all notes
+	 *
+	 * 用于「测试连接」按钮，避免 listAllNotes 的 while 翻页密集请求触发网关限频 (200001)
+	 * Used by the "Test connection" button to avoid the dense paging of listAllNotes
+	 * triggering gateway rate limiting (200001)
+	 *
+	 * 走 postOnce（单次、不退避）：测试连接应快速返回，命中限频立即抛出而非等 130s 退避
+	 * Uses postOnce (single, no backoff): test connection should return fast,
+	 * throw immediately on rate-limit instead of waiting through the 130s backoff
+	 */
+	async testConnection(): Promise<void> {
+		// limit=1 即可在 code=0 时判定凭证有效，无需关心返回的笔记内容
+		// limit=1 is enough to confirm credentials valid on code=0, note content is irrelevant
+		await this.postOnce<ListNotesResponse>(
+			'openapi/note/v1/list_note_by_folder_id',
+			{ folder_id: '', cursor: '', limit: 1 },
+		);
 	}
 
 	/**
