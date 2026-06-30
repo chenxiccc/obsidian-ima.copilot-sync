@@ -1,5 +1,5 @@
 import { requestUrl } from 'obsidian';
-import type { DataAdapter } from 'obsidian';
+import type { DataAdapter, RequestUrlResponse } from 'obsidian';
 
 // IMA API base URL / IMA API 基础地址
 const BASE_URL = 'https://ima.qq.com';
@@ -220,7 +220,7 @@ export class ImaClient {
 		// （WAF 拦截会返回 HTML 重定向页，response.json 可能为 null/undefined）
 		// requestUrl's throw:false only suppresses HTTP 4xx/5xx, not JSON parse failures
 		// (WAF blocks return an HTML redirect page, response.json may be null/undefined)
-		let response;
+		let response: RequestUrlResponse;
 		try {
 			response = await requestUrl({
 				url: `${BASE_URL}/${path}`,
@@ -245,7 +245,7 @@ export class ImaClient {
 
 		// 非 JSON 响应（WAF 拦截返回 HTML 等）：包装成 ImaApiError，避免 result.retcode 抛 TypeError
 		// Non-JSON response (WAF HTML etc.): wrap as ImaApiError to avoid TypeError on result.retcode
-		const result = response.json;
+		const result: unknown = response.json;
 		if (result === null || result === undefined || typeof result !== 'object') {
 			throw new ImaApiError(
 				ImaClient.UNKNOWN_ERROR_CODE,
