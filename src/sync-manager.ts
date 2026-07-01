@@ -2,7 +2,7 @@ import { App, Platform, Vault, Notice, normalizePath, TFile, requestUrl } from '
 import type { ImaPluginSettings } from './settings';
 import type { AttachmentOptions } from './path-utils';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
-import { ImaClient, ImaPublicClient, formatImaError, isImaApiError } from './ima-client';
+import { ImaClient, ImaPublicClient, formatImaError, isImaApiError, isRateLimitError } from './ima-client';
 import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, convertZhihuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
 import type { HtmlToMdResult } from './html-to-md';
@@ -180,6 +180,11 @@ export class SyncManager {
 
 		let syncedCount = 0;
 			let authExpired = false;
+			// 限频时中断后续同步阶段，避免无效请求；剩余条目下次增量补齐
+			// On rate-limit, skip later phases to avoid wasted requests; remaining items retry next sync
+			let rateLimited = false;
+			// 限频 Notice 只提示一次，避免刷屏 / Rate-limit Notice shown once to avoid spam
+			let notifiedRateLimit = false;
 
 		// ── 同步 IMA 笔记 / Sync IMA notes ──
 		if (this.settings.syncNotes && this.client && !authExpired) {
@@ -216,6 +221,16 @@ export class SyncManager {
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
 				} catch (err) {
+					// 限频时中断本次笔记循环，剩余笔记下次增量补齐；其他错误继续下一篇
+					// On rate-limit, break note loop (remaining notes retry next sync); other errors continue
+					if (isRateLimitError(err)) {
+						rateLimited = true;
+						if (!notifiedRateLimit) {
+							new Notice(`ima.copilot Sync: 已同步 ${syncedCount} 篇，遇到限频，剩余下次补齐 — ${formatImaError(err)}`);
+							notifiedRateLimit = true;
+						}
+						break;
+					}
 					console.warn(`ima.copilot Sync: 笔记 "${note.title}" 同步失败`, err);
 				}
 			}
@@ -231,7 +246,7 @@ export class SyncManager {
 		}
 
 		// ── 同步个人知识库（多选）/ Sync personal knowledge bases (multi-select) ──
-		if (this.settings.syncKnowledgeBase && this.client && !authExpired) {
+		if (this.settings.syncKnowledgeBase && this.client && !authExpired && !rateLimited) {
 			for (const pkb of this.settings.personalKnowledgeBases) {
 				const kbId = pkb.kbId.trim();
 				if (!kbId) continue;
@@ -276,6 +291,16 @@ export class SyncManager {
 								syncedCount++;
 							}
 						} catch (err) {
+							// 限频时中断本次知识库循环，剩余条目下次增量补齐；其他错误继续下一条
+							// On rate-limit, break KB loop (remaining items retry next sync); other errors continue
+							if (isRateLimitError(err)) {
+								rateLimited = true;
+								if (!notifiedRateLimit) {
+									new Notice(`ima.copilot Sync: 已同步 ${syncedCount} 篇，遇到限频，剩余下次补齐 — ${formatImaError(err)}`);
+									notifiedRateLimit = true;
+								}
+								break;
+							}
 							console.warn(`ima.copilot Sync: 知识库条目 "${item.title}" 同步失败`, err);
 						}
 					}
@@ -292,7 +317,7 @@ export class SyncManager {
 		}
 
 		// ── 同步公共/订阅知识库 / Sync public/subscribed knowledge bases ──
-		if (this.settings.publicKnowledgeBases.length > 0) {
+		if (this.settings.publicKnowledgeBases.length > 0 && !rateLimited) {
 			for (const pubKB of this.settings.publicKnowledgeBases) {
 				try {
 					const count = await this.syncPublicKnowledgeBase(pubKB, this.buildAttachmentOptions());
@@ -727,6 +752,13 @@ export class SyncManager {
 
 			return this.buildPlaceholder(item);
 		} catch (err) {
+			// 限频错误重新抛出，由 doSync 内层 catch 中断循环（避免 N×130s 卡死与 N 个兜底文件）
+			// 不写兜底文件 → 下次同步该条目本地不存在 → 增量逻辑自动重新获取
+			// Rate-limit re-thrown so doSync's inner catch breaks the loop (avoid N×130s stall and N placeholders)
+			// No placeholder written → next sync finds item absent locally → incremental logic re-fetches it
+			if (isRateLimitError(err)) {
+				throw err;
+			}
 			console.warn(`ima.copilot Sync: get_media_info 失败，使用占位符 / get_media_info failed, using placeholder: ${item.media_id}`, err);
 			return this.buildPlaceholder(item);
 		}

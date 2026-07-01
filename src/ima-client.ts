@@ -135,9 +135,28 @@ export class ImaApiError extends Error {
 	}
 }
 
-// 限频错误码集合（网关 200001 / notes 20002 / wiki 110021）：post 退避重试与 formatImaError 提示共用，避免双源维护
-// Rate-limit code set (gateway 200001 / notes 20002 / wiki 110021): shared by post backoff retry and formatImaError messaging to avoid dual-source maintenance
-const RATE_LIMIT_CODES = new Set([200001, 20002, 110021]);
+// 限频错误码集合（网关 200001 / notes 20002 / wiki 110021 / 20005）+ errmsg 关键词兜底
+// 20005 为 issue #3 用户报告码，文档未记录、本地无法 curl 验证；errmsg 关键词用于覆盖未来新增码
+// Rate-limit code set (gateway 200001 / notes 20002 / wiki 110021 / 20005) + errmsg keyword fallback
+// 20005 reported in issue #3, not in docs, cannot verify via curl locally; errmsg keywords cover future new codes
+const RATE_LIMIT_CODES = new Set([200001, 20002, 110021, 20005]);
+// errmsg 关键词：覆盖码集合之外的新增限频码（如每日配额类）
+// 刻意不匹配 limit（过宽，用 rate limit 替代）、exceed/超过（会误伤 210009「单篇笔记超过最大限制」等非限频错误）
+// errmsg keywords: cover new rate-limit codes outside the set (e.g. daily-quota ones)
+// Intentionally not matching limit (too broad, use rate limit), exceed/超过 (would mismatch 210009 etc.)
+const RATE_LIMIT_MSG_PATTERNS = [
+	// 中文：频率 / 限频 / 频控 / 限流 / 稍后重试 / 过于频繁 / 请求频繁 / 配额 / 每日 / 超限
+	/频率/, /限频/, /频控/, /限流/, /稍后重试/, /过于频繁/, /请求频繁/, /配额/, /每日/, /超限/,
+	// 英文：rate limit / too many requests / throttl / quota / daily / retry later / frequent
+	/rate\s*limit/i, /too many requests/i, /throttl/i, /quota/i, /daily/i, /retry later/i, /frequent/i,
+];
+
+/** 判断是否限频错误（码命中 OR errmsg 关键词命中）/ Rate-limit check (code hit OR errmsg keyword hit) */
+export function isRateLimitError(err: unknown): err is ImaApiError {
+	if (!(err instanceof ImaApiError)) return false;
+	if (RATE_LIMIT_CODES.has(err.code)) return true;
+	return RATE_LIMIT_MSG_PATTERNS.some(p => p.test(err.message));
+}
 
 /** 格式化错误消息用于用户展示 / Format error message for user display */
 export function formatImaError(err: unknown): string {
@@ -149,7 +168,7 @@ export function formatImaError(err: unknown): string {
 		}
 		// 限频码：已退避重试耗尽仍被限，提示稍后重试，并保留服务器原始 msg 便于排障
 		// Rate-limit codes: backoff exhausted, prompt to retry later, keeping the server's original msg for debugging
-		if (RATE_LIMIT_CODES.has(err.code)) {
+		if (isRateLimitError(err)) {
 			return `请求频率超限，请稍后重试（${err.message}）`;
 		}
 	}
@@ -274,8 +293,8 @@ export class ImaClient {
 	/**
 	 * 通用 POST 请求（全局节流 + 限频退避重试）/ Generic POST request (global throttle + rate-limit backoff)
 	 *
-	 * 命中限频码（200001/20002/110021）按梯度退避重试（10s → 30s → 90s），耗尽才抛出；其他错误立即抛出
-	 * On rate-limit codes (200001/20002/110021) retries with backoff (10s → 30s → 90s), throws only after exhausted;
+	 * 命中限频码（200001/20002/110021/20005 或 errmsg 关键词命中）按梯度退避重试（10s → 30s → 90s），耗尽才抛出；其他错误立即抛出
+	 * On rate-limit (200001/20002/110021/20005 or errmsg keyword match) retries with backoff (10s → 30s → 90s), throws only after exhausted;
 	 * other errors throw immediately
 	 */
 	private async post<T>(path: string, body: unknown): Promise<T> {
@@ -287,7 +306,7 @@ export class ImaClient {
 				return await this.postOnce<T>(path, body);
 			} catch (err) {
 				// 非限频码错误立即向上抛出 / Non-rate-limit errors propagate immediately
-				if (!(err instanceof ImaApiError) || !RATE_LIMIT_CODES.has(err.code)) {
+				if (!isRateLimitError(err)) {
 					throw err;
 				}
 				// 限频码但退避次数耗尽：抛出，由 formatImaError 转成用户提示
