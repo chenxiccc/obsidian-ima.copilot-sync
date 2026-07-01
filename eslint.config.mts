@@ -30,6 +30,17 @@ export default tseslint.config(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	// 本地有 @types/node（require 有类型），官方扫描无（require 退化为 any）。
+	// file-downloader.ts 的 eslint-disable 指令在本地是"unused"但在官方扫描需要；
+	// 关闭报告避免本地误报 / Locally @types/node is present (require is typed) but
+	// the official scanner lacks it (require degrades to any). The eslint-disable
+	// directives in file-downloader.ts are "unused" locally but needed for the scanner;
+	// disable reporting to avoid local false-positives.
+	{
+		linterOptions: {
+			reportUnusedDisableDirectives: 'off',
+		},
+	},
 	// ima.copilot 是品牌名（IMA 缩写），保留原大小写不套 sentence-case 的首字母大写规范；
 	// 用 ignoreRegex 整串豁免含 ima.copilot 的文案（大小写无关）
 	// ima.copilot is a brand name (IMA acronym); keep its casing instead of sentence-case's

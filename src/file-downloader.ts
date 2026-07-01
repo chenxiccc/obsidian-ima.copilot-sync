@@ -12,6 +12,38 @@ import {
 } from './path-utils';
 import { buildHeaders } from './http-utils';
 
+// ─── 本地 Node.js 类型接口（官方扫描器无 @types/node，用本地接口阻断 any 传播）
+// Local Node.js type interfaces (official scanner lacks @types/node; local interfaces block any propagation)
+
+/** Node.js http.IncomingMessage 最小接口 / Minimal Node.js http.IncomingMessage interface */
+interface NodeIncomingMessage {
+	statusCode?: number;
+	headers: Record<string, string | string[] | undefined>;
+	resume(): void;
+	on(event: 'data', listener: (chunk: Uint8Array) => void): this;
+	on(event: 'end', listener: () => void): this;
+	on(event: 'error', listener: (err: Error) => void): this;
+}
+
+/** Node.js http.ClientRequest 最小接口 / Minimal Node.js http.ClientRequest interface */
+interface NodeClientRequest {
+	on(event: 'error', listener: (err: Error) => void): this;
+	setTimeout(ms: number, callback: () => void): this;
+	destroy(): void;
+}
+
+/** Node.js http/https 模块最小接口 / Minimal Node.js http/https module interface */
+interface NodeHttpModule {
+	get(url: string, options: { headers: Record<string, string> }, callback: (res: NodeIncomingMessage) => void): NodeClientRequest;
+}
+
+/** 从 Node.js 响应头中提取字符串值（处理 string | string[] | undefined 联合类型）
+ * Extract string value from Node.js response headers (handles string | string[] | undefined union) */
+function getHeader(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
+	const v = headers[name];
+	return Array.isArray(v) ? v[0] : v;
+}
+
 // ─── 通用文件下载器（支持反盗链）/ Generic file downloader (with anti-hotlink support) ──
 
 /** 下载结果 / Download result */
@@ -226,12 +258,12 @@ export class FileDownloader {
 	 *
 	 * 参考 Share to Save downloader.ts:331-416 / Ref: Share to Save downloader.ts:331-416
 	 */
-	private nodeHttpsGetBuffer(
+	private async nodeHttpsGetBuffer(
 		url: string,
 		headers: Record<string, string>,
 		retryCount = 0,
 		redirectCount = 0,
-	): Promise<{ buffer: Buffer; contentType: string }> {
+	): Promise<{ buffer: Uint8Array; contentType: string }> {
 		const MAX_RETRIES = 2;
 		const MAX_REDIRECTS = 5;
 
@@ -242,14 +274,15 @@ export class FileDownloader {
 		// 根据协议动态选择模块，支持 HTTP 和 HTTPS（参考 Share to Save image-handler.ts:370-372）
 		// Select module by protocol, support both HTTP and HTTPS (ref: Share to Save image-handler.ts:370-372)
 		const protocol = new URL(url).protocol === 'http:' ? 'http' : 'https';
-		// 动态 require 避免 Node 模块在移动端顶层加载；require 类型由 @types/node 提供，
-		// 断言为 https 模块类型使回调参数 res/req 获得强类型（http 与 https 的 get 签名兼容）
-		// Dynamic require avoids loading Node modules at top level on mobile; require is typed by
-		// @types/node, asserted to the https module type so callback res/req get strong types
-		// eslint-disable-next-line @typescript-eslint/no-require-imports -- Dynamic require for Node.js module based on URL protocol
-		const mod = require(protocol) as typeof import('https');
+// 动态 require 避免 Node 模块在移动端顶层加载；官方扫描器无 @types/node，
+		// 用本地 NodeHttpModule 接口阻断 any 传播（require 本身需豁免 no-unsafe-call/assignment）
+		// Dynamic require avoids loading Node modules at top level on mobile; official scanner
+		// lacks @types/node, use local NodeHttpModule interface to block any propagation
+		// (require itself needs no-unsafe-call/assignment exemption)
+		// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- Dynamic require for Node.js module; typed by local NodeHttpModule interface
+		const mod = require(protocol) as NodeHttpModule;
 
-		return new Promise<{ buffer: Buffer; contentType: string }>((resolve, reject) => {
+		return new Promise<{ buffer: Uint8Array; contentType: string }>((resolve, reject) => {
 			// 重试辅助函数，防重复触发 / Retry helper with dedup guard
 			let settled = false;
 			const retry = (reason: string) => {
@@ -273,10 +306,10 @@ export class FileDownloader {
 
 			const req = mod.get(url, { headers }, (res) => {
 				// 处理重定向（含相对路径解析）/ Handle redirect (with relative URL resolution)
-				if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+				if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && getHeader(res.headers, 'location')) {
 					res.resume();  // 排空响应体 / Drain response body
 					settled = true;  // 阻止原请求的 timeout 重试 / prevent original timeout from retrying
-					const redirectUrl = new URL(res.headers.location, url).toString();
+					const redirectUrl = new URL(getHeader(res.headers, 'location')!, url).toString();
 					this.nodeHttpsGetBuffer(redirectUrl, headers, retryCount, redirectCount + 1)
 						.then(resolve)
 						.catch(reject);
@@ -315,11 +348,19 @@ export class FileDownloader {
 
 				// 捕获 Content-Type 用于后续扩展名修正（参考 Share to Save image-handler.ts:388）
 				// Capture Content-Type for later extension correction (ref: Share to Save image-handler.ts:388)
-				const contentType = res.headers['content-type'] ?? '';
-				const chunks: Buffer[] = [];
-				res.on('data', (chunk: Buffer) => chunks.push(chunk));
+const contentType = getHeader(res.headers, 'content-type') ?? '';
+				const chunks: Uint8Array[] = [];
+				res.on('data', (chunk: Uint8Array) => chunks.push(chunk));
 				res.on('end', () => {
-					const buffer = Buffer.concat(chunks);
+					// 手动拼接 Uint8Array 替代 Buffer.concat（避免依赖 Buffer 全局类型）
+					// Manual Uint8Array concat instead of Buffer.concat (avoids Buffer global type dependency)
+					const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+					const buffer = new Uint8Array(totalLen);
+					let offset = 0;
+					for (const c of chunks) {
+						buffer.set(c, offset);
+						offset += c.length;
+					}
 					if (buffer.length < 1024) {
 						console.warn(`ima.copilot Sync: Node.js 仅获取 ${buffer.length} 字节，可能是防盗链错误页 / Node.js only got ${buffer.length} bytes, may be anti-hotlink error page`);
 					}
@@ -359,7 +400,7 @@ export class FileDownloader {
 		headers: Record<string, string>,
 	): Promise<string> {
 		const { buffer } = await this.nodeHttpsGetBuffer(url, headers);
-		return buffer.toString('utf-8');
+		return new TextDecoder().decode(buffer);
 	}
 
 	/** 格式化图片链接 / Format image link */
