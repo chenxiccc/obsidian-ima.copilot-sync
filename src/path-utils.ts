@@ -218,7 +218,10 @@ function shortHash(url: string): string {
 		hash = ((hash << 5) - hash + url.charCodeAt(i)) | 0;
 	}
 	// 转为 8 位十六进制 + 保留原始低 8 位确保唯一性 / Convert to 8 hex chars with low bits for uniqueness
-	return (hash >>> 0).toString(16).padStart(8, '0');
+	// padStart 在部分 lib 配置下缺类型声明退化为 any，用前补零 + slice 等价实现
+	// padStart lacks type decl under some lib configs degrading to any; use zero-pad + slice instead
+	const unsigned: number = hash >>> 0;
+	return ('00000000' + unsigned.toString(16)).slice(-8);
 }
 
 /** Markdown 链接路径含空格时用 <> 包裹 / Wrap Markdown link path with <> when it contains spaces */

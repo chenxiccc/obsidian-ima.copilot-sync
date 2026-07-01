@@ -382,8 +382,14 @@ export class ImageHandler {
 	private computeContentHash(buffer: ArrayBuffer): string {
 		const bytes = new Uint8Array(buffer);
 		const len = bytes.length;
-		const head = bytes.subarray(0, 64).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
-		const tail = bytes.subarray(-64).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
+		// padStart 在部分 lib 配置下缺类型声明退化为 any，用 hexByte 辅助手动补零
+		// padStart lacks type decl under some lib configs degrading to any; use hexByte helper
+		const hexByte = (b: number): string => {
+			const h = b.toString(16);
+			return h.length < 2 ? `0${h}` : h;
+		};
+		const head = bytes.subarray(0, 64).reduce<string>((s, b) => s + hexByte(b), '');
+		const tail = bytes.subarray(-64).reduce<string>((s, b) => s + hexByte(b), '');
 		return `${len}:${head}:${tail}`;
 	}
 

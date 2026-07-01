@@ -716,7 +716,9 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 			// 安全网：全页补充遗漏图片 / Safety net: supplement missed images
 			const imagesMarkdown = extractWeChatImages(doc, result.content);
 			if (imagesMarkdown && result.content) {
-				result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
+				// trimEnd 在部分 lib 配置下缺类型声明退化为 any，用 replace 等价去除尾部空白
+				// trimEnd lacks type decl under some lib configs degrading to any; use replace instead
+				result.content = result.content.replace(/\s+$/, '') + '\n' + imagesMarkdown;
 			}
 
 			return result;
@@ -755,7 +757,9 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 	const resultContent = result.content || '';
 	const imagesMarkdown = extractWeChatImages(doc, resultContent);
 	if (imagesMarkdown && resultContent) {
-		result.content = result.content.trimEnd() + '\n' + imagesMarkdown;
+		// trimEnd 在部分 lib 配置下缺类型声明退化为 any，用 replace 等价去除尾部空白
+		// trimEnd lacks type decl under some lib configs degrading to any; use replace instead
+		result.content = result.content.replace(/\s+$/, '') + '\n' + imagesMarkdown;
 		// Tier 2 (og:description) 补到图后清除 fromMeta，避免 headless 冗余触发
 		// Tier 2 recovery: clear fromMeta if images were supplemented
 		if (result.fromMeta) {
@@ -1239,7 +1243,10 @@ function buildZhihuTimeResult(created: number, updated: number, ipInfo: string):
 		const d = new Date(ts * 1000 + 8 * 60 * 60 * 1000);
 		// 用 getUTC* 系列方法，因为 +8h 已做偏移，UTC 方法输出即为北京时间
 		// Use getUTC* methods — +8h offset already applied, UTC output = Beijing time
-		return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+		// padStart 在部分 lib 配置下缺类型声明退化为 any，用 pad2 辅助函数手动补零
+		// padStart lacks type decl under some lib configs degrading to any; use pad2 helper instead
+		const pad2 = (n: number): string => (n < 10 ? `0${n}` : String(n));
+		return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
 	};
 
 	const published = fmtTs(updated);

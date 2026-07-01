@@ -242,6 +242,10 @@ export class FileDownloader {
 		// 根据协议动态选择模块，支持 HTTP 和 HTTPS（参考 Share to Save image-handler.ts:370-372）
 		// Select module by protocol, support both HTTP and HTTPS (ref: Share to Save image-handler.ts:370-372)
 		const protocol = new URL(url).protocol === 'http:' ? 'http' : 'https';
+		// 动态 require 避免 Node 模块在移动端顶层加载；require 类型由 @types/node 提供，
+		// 断言为 https 模块类型使回调参数 res/req 获得强类型（http 与 https 的 get 签名兼容）
+		// Dynamic require avoids loading Node modules at top level on mobile; require is typed by
+		// @types/node, asserted to the https module type so callback res/req get strong types
 		// eslint-disable-next-line @typescript-eslint/no-require-imports -- Dynamic require for Node.js module based on URL protocol
 		const mod = require(protocol) as typeof import('https');
 

@@ -1163,7 +1163,11 @@ export class SyncManager {
 
 		let result = content;
 		for (const match of matches) {
-			const attrStr = match[1];
+			// matchAll 返回的 RegExpMatchArray 索引访问在严格类型检查下退化为 any，
+			// 用 String() 显式转 string 消除 no-unsafe-assignment / 后续 unsafe-argument 传播
+			// RegExpMatchArray index access degrades to any under strict type-checking;
+			// String() coerces to string, breaking the unsafe-assignment / unsafe-argument chain
+			const attrStr = String(match[1] ?? '');
 			if (!attrStr) continue;
 			const mediaId = this.extractAttr(attrStr, 'mediaId');
 			if (!mediaId) continue;
@@ -1186,7 +1190,10 @@ export class SyncManager {
 				});
 
 				if (download.linkText) {
-					result = result.replace(match[0], download.linkText);
+					// match[0] 在严格配置下退化为 any，用 String() 显式转 string 消除 unsafe 且不产生多余断言
+					// match[0] degrades to any under strict configs; String() coerces to string,
+					// clearing unsafe without an unnecessary assertion
+					result = result.replace(String(match[0]), download.linkText);
 				}
 			} catch (err) {
 				console.warn(

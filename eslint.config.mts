@@ -8,9 +8,9 @@ export default tseslint.config(
 		languageOptions: {
 			globals: {
 				...globals.browser,
-				// Electron/Node.js 运行时全局变量 / Electron/Node.js runtime globals
-				Buffer: 'readonly',
-				require: 'readonly',
+				// Node.js 运行时全局变量（Buffer/require 等），类型由 @types/node 提供
+				// Node.js runtime globals (Buffer/require etc.), typed by @types/node
+				...globals.node,
 			},
 			parserOptions: {
 				projectService: {
