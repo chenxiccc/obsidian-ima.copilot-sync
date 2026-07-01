@@ -16,7 +16,7 @@
 		"@types/node": "^16.18.126",
 		"esbuild": "0.25.5",
 		"eslint": "^9.39.4",
-		"eslint-plugin-obsidianmd": "^0.3.0",
+		"eslint-plugin-obsidianmd": "^0.4.0",
 		"globals": "^17.6.0",
 		"jiti": "^2.7.0",
 		"tslib": "2.4.0",
@@ -25,6 +25,6 @@
 	},
 	"dependencies": {
 		"defuddle": "^0.18.1",
-		"obsidian": "latest"
+		"obsidian": "^1.13.1"
 	}
 }

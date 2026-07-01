@@ -208,12 +208,12 @@ export class ImaSettingTab extends PluginSettingTab {
 					frag.createEl('br');
 					frag.appendText('复制页面上的凭证文本后，点击右侧按钮可自动解析填入。');
 					frag.createEl('br');
-					frag.createEl('span', {
+					frag.createSpan({
 						text: '凭证格式：API Key: xxx\\nClient ID: xxx',
 						attr: { style: 'color: var(--text-muted); font-size: 0.85em;' },
 					});
 					frag.createEl('br');
-					frag.createEl('span', {
+					frag.createSpan({
 						text: '凭证将安全存储于 Obsidian 钥匙串中，不会以明文保存在配置文件里。',
 						attr: { style: 'color: var(--text-muted); font-size: 0.85em;' },
 					});
@@ -399,7 +399,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 					const label = row.createEl('label');
 					label.textContent = `${base.kb_name}`;
-					const idSpan = label.createEl('span', { cls: 'ima-kb-id' });
+					const idSpan = label.createSpan({ cls: 'ima-kb-id' });
 					idSpan.textContent = `  (${base.content_count} 个内容)`;
 
 					const removePersonal = async (deleteFiles: boolean) => {
@@ -463,7 +463,7 @@ export class ImaSettingTab extends PluginSettingTab {
 
 					const label = row.createEl('label');
 					label.textContent = `${base.kb_name}`;
-					const infoSpan = label.createEl('span', { cls: 'ima-kb-id' });
+					const infoSpan = label.createSpan({ cls: 'ima-kb-id' });
 					infoSpan.textContent = `  (${base.content_count} 个内容, ${base.member_count} 人订阅)`;
 
 					const removeSubscribed = async (deleteFiles: boolean) => {
@@ -631,9 +631,9 @@ export class ImaSettingTab extends PluginSettingTab {
 
 			for (const base of bases) {
 				const row = publicKbListContainer.createDiv({ cls: 'ima-pubkb-row' });
-				const nameSpan = row.createEl('span', { cls: 'ima-pubkb-name' });
+				const nameSpan = row.createSpan({ cls: 'ima-pubkb-name' });
 				nameSpan.textContent = base.name;
-				const timeSpan = row.createEl('span', { cls: 'ima-pubkb-time' });
+				const timeSpan = row.createSpan({ cls: 'ima-pubkb-time' });
 				timeSpan.textContent = base.lastSyncTime > 0
 					? `上次同步：${new Date(base.lastSyncTime).toLocaleString()}`
 					: '从未同步';
