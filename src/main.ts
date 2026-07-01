@@ -55,7 +55,7 @@ export default class ImaPlugin extends Plugin {
 
 		// ── Ribbon 手动同步按钮 / Ribbon manual sync button ─────────────────
 		addIcon(RIBBON_ICON_ID, RIBBON_ICON_SVG);
-		this.ribbonIconEl = this.addRibbonIcon(RIBBON_ICON_ID, 'ima.copilot Sync：立即同步', () => {
+		this.ribbonIconEl = this.addRibbonIcon(RIBBON_ICON_ID, '🐼 ima.copilot sync：立即同步', () => {
 			void this.triggerSync();
 		});
 

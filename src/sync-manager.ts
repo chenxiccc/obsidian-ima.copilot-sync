@@ -90,7 +90,7 @@ export class SyncManager {
 
 	async syncOnce(): Promise<void> {
 		if (this.isSyncing) {
-			new Notice('ima.copilot sync: 同步正在进行中，请稍候');
+			new Notice('🐼 ima.copilot sync: 同步正在进行中，请稍候');
 			return;
 		}
 		this.isSyncing = true;
@@ -110,24 +110,24 @@ export class SyncManager {
 		);
 		const hasPublicWork = this.settings.publicKnowledgeBases.length > 0;
 		if ((hasPrivateWork || hasSubscribedKBNeedingConversion) && !hasCredentials) {
-			new Notice('ima.copilot sync: 私有同步需要 Client ID 和 API Key，请先在设置中填写');
+			new Notice('🐼 ima.copilot sync: 私有同步需要 Client ID 和 API key，请先在设置中填写');
 			this.isSyncing = false;
 			return;
 		}
 		if (!hasPrivateWork && !hasPublicWork) {
-			new Notice('ima.copilot sync: 没有可执行的同步任务');
+			new Notice('🐼 ima.copilot sync: 没有可执行的同步任务');
 			this.isSyncing = false;
 			return;
 		}
 		this.onSyncStateChange?.(true);
-		new Notice('ima.copilot sync: 开始同步…');
+		new Notice('🐼 ima.copilot sync: 开始同步…');
 
 		try {
 			const syncedCount = await this.doSync();
-			new Notice(`ima.copilot Sync: 同步完成，共同步 ${syncedCount} 篇笔记`);
+			new Notice(`🐼 ima.copilot sync: 同步完成，共同步 ${syncedCount} 篇笔记`);
 		} catch (err) {
 			console.error('ima.copilot Sync error:', err);
-			new Notice(`ima.copilot Sync: 同步失败 — ${formatImaError(err)}`);
+			new Notice(`🐼 ima.copilot sync: 同步失败 — ${formatImaError(err)}`);
 		} finally {
 			this.isSyncing = false;
 			this.onSyncStateChange?.(false);
