@@ -210,7 +210,7 @@ export class FileDownloader {
 
 		const { buffer, contentType } = await this.nodeHttpsGetBuffer(url, nodeHeaders);
 		return {
-			buffer: (buffer.buffer as ArrayBuffer).slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+			buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
 			contentType,
 		};
 	}
@@ -384,7 +384,7 @@ const contentType = getHeader(res.headers, 'content-type') ?? '';
 		headers: Record<string, string>,
 	): Promise<void> {
 		const { buffer } = await this.nodeHttpsGetBuffer(url, headers);
-		await this.vault.adapter.writeBinary(destPath, (buffer.buffer as ArrayBuffer).slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+		await this.vault.adapter.writeBinary(destPath, buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer);
 		console.debug(`ima.copilot Sync: Node.js 下载完成 / Node.js download complete: ${destPath}`);
 	}
 

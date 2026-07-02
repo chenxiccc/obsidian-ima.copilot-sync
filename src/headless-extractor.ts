@@ -65,7 +65,7 @@ export class HeadlessExtractor {
 		// 使用 weread-plugin 确证的 require 模式 / Use weread-plugin proven require pattern
 		let RemoteBrowserWindow: { new (options: Record<string, unknown>): ElectronBrowserWindow } | undefined;
 		try {
-			// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- Electron is external in esbuild, resolved by Obsidian runtime at execution
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- Electron is external in esbuild, resolved by Obsidian runtime at execution
 			RemoteBrowserWindow = require('electron').remote.BrowserWindow;
 		} catch {
 			return null;

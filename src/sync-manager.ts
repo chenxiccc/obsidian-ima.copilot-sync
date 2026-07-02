@@ -1157,17 +1157,17 @@ export class SyncManager {
 		opts: AttachmentOptions,
 	): Promise<string> {
 		if (!this.client) return content;
-		const matches = [...content.matchAll(FILE_TAG_REGEX)];
-		console.debug(`ima.copilot Sync: processInlineFileTags found ${matches.length} file tags`);
-		if (matches.length === 0) return content;
-
+		// RegExp.exec() 循环替代 matchAll：matchAll 是 ES2020 API，当前 tsconfig lib 不含其类型定义，
+		// 会退化为 any 触发 no-unsafe-* 警告；exec() 是 ES3 API，有完整 RegExpExecArray 类型
+		// Replace matchAll with RegExp.exec() loop: matchAll is ES2020, not in tsconfig lib,
+		// so it degrades to any triggering no-unsafe-*; exec() is ES3 with full RegExpExecArray types
+		const regex = new RegExp(FILE_TAG_REGEX.source, FILE_TAG_REGEX.flags);
 		let result = content;
-		for (const match of matches) {
-			// matchAll 返回的 RegExpMatchArray 索引访问在严格类型检查下退化为 any，
-			// 用 String() 显式转 string 消除 no-unsafe-assignment / 后续 unsafe-argument 传播
-			// RegExpMatchArray index access degrades to any under strict type-checking;
-			// String() coerces to string, breaking the unsafe-assignment / unsafe-argument chain
-			const attrStr = String(match[1] ?? '');
+		let matchCount = 0;
+		let match: RegExpExecArray | null;
+		while ((match = regex.exec(content)) !== null) {
+			matchCount++;
+			const attrStr = match[1] ?? '';
 			if (!attrStr) continue;
 			const mediaId = this.extractAttr(attrStr, 'mediaId');
 			if (!mediaId) continue;
@@ -1190,10 +1190,7 @@ export class SyncManager {
 				});
 
 				if (download.linkText) {
-					// match[0] 在严格配置下退化为 any，用 String() 显式转 string 消除 unsafe 且不产生多余断言
-					// match[0] degrades to any under strict configs; String() coerces to string,
-					// clearing unsafe without an unnecessary assertion
-					result = result.replace(String(match[0]), download.linkText);
+					result = result.replace(match[0], download.linkText);
 				}
 			} catch (err) {
 				console.warn(
@@ -1202,6 +1199,7 @@ export class SyncManager {
 				);
 			}
 		}
+		console.debug(`ima.copilot Sync: processInlineFileTags found ${matchCount} file tags`);
 
 		return result;
 	}
