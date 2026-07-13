@@ -1,6 +1,6 @@
 {
 	"name": "ima-copilot-sync",
-	"version": "6.5.1",
+	"version": "6.6.0",
 	"description": "Sync notes from IMA personal knowledge base to Obsidian",
 	"main": "main.js",
 	"type": "module",
