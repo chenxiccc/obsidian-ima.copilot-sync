@@ -1,5 +1,7 @@
 import Defuddle from 'defuddle/full';
 import type { DefuddleOptions } from 'defuddle/full';
+import TurndownService from 'turndown';
+import { gfm } from '@joplin/turndown-plugin-gfm';
 import { escapeInlineHash } from './path-utils';
 
 // ─── HTML→Markdown 转换器（基于 defuddle）/ HTML→Markdown converter (defuddle-based) ────
@@ -419,12 +421,25 @@ function detectWeChatContentSelector(doc: Document): string | null {
 function isWeChatBlockPage(doc: Document): boolean {
 	// 参考 Share to Save: headless-extractor.ts:147-150 hasCaptcha()
 	const text = doc.body?.textContent || '';
-		return text.includes('环境异常')
+	const hasWarningText = text.includes('环境异常')
 		|| text.includes('请完成安全验证')
 		|| text.includes('操作频繁')
+		|| text.includes('未经审核的第三方商业营销信息')
+		|| text.includes('请确认是否继续访问')
 		|| /captcha/i.test(text)
 		|| /js_verify/i.test(text)
 		|| /verify_container/i.test(text);
+	if (!hasWarningText) return false;
+
+	// 警告文字 + #js_content 无实质内容 → 真拦截页(纯遮罩无正文),返回 true 短路让调用方回退;
+	// 警告文字 + #js_content 有实质内容 → 正文 + 遮罩共存,不是拦截页,走主路径提取
+	// (遮罩层会在 buildCleanWeChatHtml 中移除,turndown 直取 #js_content 节点)
+	// Warning text + #js_content empty → real block page (overlay only, no body), return true to short-circuit;
+	// Warning text + #js_content has content → body + overlay coexist, not a block page, extract via main path
+	// (overlay removed in buildCleanWeChatHtml, turndown converts #js_content node directly)
+	const jsContent = doc.getElementById('js_content');
+	const hasArticleContent = jsContent && (jsContent.textContent?.trim().length || 0) > 200;
+	return !hasArticleContent;
 }
 
 /**
@@ -483,6 +498,15 @@ function buildCleanWeChatDom(doc: Document): Document {
 		'.swiper_indicator_wrp',
 		'.swiper_indicator_wrp_pc',
 		'.right-bottom_area',
+		// 营销审核警告遮罩：微信 JS 渲染后叠加的"未经审核的第三方商业营销信息"半屏弹窗
+		// Marketing-review warning overlay: half-screen dialog injected by WeChat JS after render
+		// 正文 #js_content 本身可见(style=""),遮罩是独立的 visibility:hidden 浮层,移除避免污染提取
+		// #js_content body stays visible (style=""), overlay is a separate visibility:hidden floating layer
+		'.weui-half-screen-dialog',
+		'.ad_control-tips',
+		'[class*="ad_control"]',
+		'.pay_area',
+		'.wx_bottom_modal',
 	];
 	uiSelectors.forEach(sel => {
 		try { clone.querySelectorAll(sel).forEach(n => n.remove()); } catch { /* skip */ }
@@ -553,6 +577,354 @@ function buildCleanWeChatDom(doc: Document): Document {
 	return newDoc;
 }
 
+// ─── 微信 turndown 转换器 / WeChat turndown converter ──────────────────────
+// 参照 Share to Save: content-converter.ts WeChatConverter + text-utils.ts
+// defuddle 对微信 flexbox <section> 伪结构无法识别导致塌缩, 改用 turndown 直取 #js_content 节点
+// defuddle can't parse WeChat flexbox <section> pseudo-structure (collapses), use turndown on #js_content node directly
+
+/**
+ * 转义 Markdown 链接目标 URL 中的特殊字符 / Escape special chars in Markdown link destination URL
+ *
+ * <>() 用反斜杠转义；含空格的 URL 额外用尖括号包裹。
+ * <>() are backslash-escaped; URLs containing spaces are angle-bracket wrapped.
+ *
+ * 参考 Share to Save: text-utils.ts:71-73 escapeLinkDestination()
+ */
+function escapeLinkDestination(destination: string): string {
+	const escaped = destination.replace(/([<>()])/g, '\\$1');
+	return escaped.indexOf(' ') >= 0 ? '<' + escaped + '>' : escaped;
+}
+
+/** turndown 单例, 含微信自定义规则 / turndown singleton with WeChat custom rules */
+let wechatTurndown: TurndownService | null = null;
+
+/**
+ * 获取微信专用 turndown 实例（懒初始化单例）/ Get WeChat-dedicated turndown instance (lazy singleton)
+ *
+ * 配置 + 4 条自定义规则照搬 Share to Save content-converter.ts:350-437 getTurndown()。
+ * Config + 4 custom rules ported from Share to Save content-converter.ts:350-437 getTurndown().
+ */
+function getWeChatTurndown(): TurndownService {
+	if (wechatTurndown) return wechatTurndown;
+
+	const td = new TurndownService({
+		headingStyle: 'atx',
+		codeBlockStyle: 'fenced',
+		emDelimiter: '_',
+		bulletListMarker: '-',
+	});
+
+	// GFM 扩展：表格、删除线、任务列表、围栏代码块高亮 / GFM: tables, strikethrough, task lists, fenced code
+	td.use(gfm);
+
+	// 用内置 remove 移除噪声标签 / Remove noise tags via built-in remove
+	td.remove(['style', 'script', 'noscript']);
+
+	// 图片规则：data-src 优先（微信懒加载），过滤非 http / Image rule: prefer data-src (WeChat lazy load), skip non-http
+	td.addRule('image', {
+		filter: 'img',
+		replacement: (_c: string, node: Node) => {
+			const el = node as HTMLElement;
+			const url = el.getAttribute('data-src') || el.getAttribute('src') || '';
+			if (!url || !/^https?:\/\//.test(url)) return '';
+			const rawAlt = (el.getAttribute('alt') || '').replace(/\s+/g, ' ').trim() || 'Image';
+			const alt = td.escape(rawAlt);
+			const escapedUrl = escapeLinkDestination(url);
+			return `![${alt}](${escapedUrl})`;
+		},
+	});
+
+	// SVG 包裹图片（微信 ezDrop）：提取 svg 内的 img / SVG-wrapped images (WeChat ezDrop): extract img inside svg
+	td.addRule('svgImage', {
+		filter: (node: HTMLElement) => node.nodeName.toLowerCase() === 'svg',
+		replacement: (_c: string, node: Node) => {
+			const parts: string[] = [];
+			(node as HTMLElement).querySelectorAll('img').forEach(img => {
+				const url = img.getAttribute('data-src') || img.getAttribute('src') || '';
+				if (url && /^https?:\/\//.test(url)) {
+					const rawAlt = (img.getAttribute('alt') || '').replace(/\s+/g, ' ').trim() || 'Image';
+					const alt = td.escape(rawAlt);
+					const escapedUrl = escapeLinkDestination(url);
+					parts.push(`![${alt}](${escapedUrl})`);
+				}
+			});
+			return parts.join('\n');
+		},
+	});
+
+	// javascript:; 链接（微信话题标签等）：去掉链接，转义 # 防 Obsidian 标签
+	// javascript:; links (WeChat topic tags etc.): strip link, escape # to prevent Obsidian tags
+	td.addRule('jsLink', {
+		filter: (node: HTMLElement) =>
+			node.nodeName.toLowerCase() === 'a' && (node.getAttribute('href') || '').startsWith('javascript:'),
+		replacement: (content: string) => {
+			return escapeInlineHash(content);
+		},
+	});
+
+	// 带图片的链接：有文字 → 文字链接；无文字 → 保留图片（微信点击查看大图）
+	// Linked images: has text → text link; no text → keep image (WeChat click-to-enlarge)
+	td.addRule('linkedImage', {
+		filter: (node: HTMLElement) =>
+			node.nodeName.toLowerCase() === 'a' && node.querySelector('img') !== null,
+		replacement: (_content: string, node: Node) => {
+			const el = node as HTMLElement;
+			const href = el.getAttribute('href') || '';
+			const img = el.querySelector('img');
+			const imgUrl = img ? (img.getAttribute('data-src') || img.getAttribute('src') || '') : '';
+			const imgAlt = img ? (img.alt || '') : '';
+			const rawText = (el.textContent || '').trim();
+			const textOnly = rawText.replace(imgAlt, '').replace(/\s+/g, ' ').trim();
+			if (href && /^https?:\/\//.test(href) && textOnly) {
+				return `[${textOnly}](${escapeLinkDestination(href)})`;
+			}
+			// 无文字说明 → 保留图片 / No text content → keep the image
+			if (imgUrl && /^https?:\/\//.test(imgUrl)) {
+				const rawAlt = imgAlt.replace(/\s+/g, ' ').trim() || 'Image';
+				const alt = td.escape(rawAlt);
+				const escapedImgUrl = escapeLinkDestination(imgUrl);
+				return `![${alt}](${escapedImgUrl})`;
+			}
+			return '';
+		},
+	});
+
+	wechatTurndown = td;
+	return td;
+}
+
+// ─── 微信 Markdown 格式规范化 / WeChat Markdown normalization ──
+// 照搬 Share to Save: text-utils.ts normalizeBoldElements + normalizeBoldMarkers + cleanWhitespace
+// Ported from Share to Save text-utils.ts. 解决 turndown 输出的多重 **/跨行 bold/多余空行问题。
+// Fixes turndown output issues: nested ****, bold spanning newlines, excess blank lines.
+
+/**
+ * 扁平化 DOM 中嵌套的 strong/b 标签 + bold 结束标签后补空格
+ * Flatten nested strong/b tags in DOM + ensure space after bold closing tag
+ *
+ * 微信编辑器常产生 <strong><strong>text</strong></strong>（双重加粗），turndown 会输出 ****text****。
+ * 扁平化嵌套后输出正常 **text**。bold 结束标签后补空格防止 bold 紧贴后续文字被吞。
+ * WeChat editor often produces <strong><strong>text</strong></strong> (double bold), turndown outputs ****text****.
+ * Flattening restores normal **text**. Space after bold prevents text swallowing.
+ *
+ * 参照 Share to Save: text-utils.ts:264-289 normalizeBoldElements()
+ */
+function normalizeBoldElements(root: HTMLElement): void {
+	// a. 扁平化嵌套的 strong/b 标签 / Flatten nested strong/b tags
+	root.querySelectorAll('strong strong, strong b, b strong, b b').forEach(el => {
+		const parent = el.parentNode;
+		if (!parent) return;
+		while (el.firstChild) parent.insertBefore(el.firstChild, el);
+		el.remove();
+	});
+	// b. 确保 bold 结束标签后有空格 / Ensure space after bold closing tag
+	root.querySelectorAll('strong, b').forEach(el => {
+		const next = el.nextSibling;
+		if (!next) return;
+		// 文本节点：以非空白开头则前置空格 / Text node: prepend space if starts with non-whitespace
+		if (next.nodeType === 3) {
+			const text = next.textContent || '';
+			if (text && !/^\s/.test(text)) {
+				next.textContent = ' ' + text;
+			}
+			return;
+		}
+		// 元素节点：中间无文本节点则插入空格 / Element node: insert space if no text node between
+		if (next.nodeType === 1 && el.nextSibling === next) {
+			el.parentNode?.insertBefore(document.createTextNode(' '), next);
+		}
+	});
+}
+
+/**
+ * 修复跨行 bold 标记：**text\n** → **text**
+ * Fix multiline bold markers: **text\n** → **text**
+ *
+ * turndown 遇到跨越 <br> 的 <strong> 时，会把 ** 放到换行后，Obsidian 无法渲染。
+ * 此函数将跨行的 **text\n** 合并为单行 **text**。
+ * When turndown meets <strong> spanning a <br>, it places ** after the newline; Obsidian can't render.
+ * This merges **text\n** into single-line **text**.
+ *
+ * 参照 Share to Save: text-utils.ts:329-335 normalizeBoldMarkers()
+ */
+function normalizeBoldMarkers(md: string): string {
+	// 快速路径：无 ** 后跟换行 + 独立 ** 模式 → 跳过 / Fast path: no ** + newline + ** pattern → skip
+	if (!/\*\*[^*\n]+\n\*\*/.test(md)) return md;
+	return md.replace(/\*\*([^*\n]+)\n\*\*/g, '**$1**');
+}
+
+/**
+ * 清理多余空行：纯空白行清空 + 连续空行合并为最多一个空行
+ * Clean excess whitespace: empty whitespace-only lines + collapse consecutive blank lines to at most one
+ *
+ * turndown 对微信空 <section> 会输出多个连续空行，Obsidian 渲染为大片空白。
+ * 参照 Share to Save: content-converter.ts:99-106 cleanWhitespace()
+ * turndown outputs many consecutive blank lines for empty WeChat <section>, rendering as large gaps.
+ */
+function cleanWeChatWhitespace(md: string): string {
+	return md
+		.split('\n')
+		.map(line => line.trim() ? line.trimEnd() : '')
+		.join('\n')
+		.replace(/\n{3,}/g, '\n\n')
+		.trimEnd();
+}
+
+/**
+ * 微信 #js_content 节点预处理：data-src 提升、UI 移除、代码块、图片去重、伪列表合并 → 干净 HTML 字符串
+ * WeChat #js_content node preprocessing: data-src promotion, UI removal, code blocks, image dedup, pseudo-list merge → clean HTML string
+ *
+ * 参照 Share to Save: content-converter.ts:136-267 buildCleanHtml()。对 #js_content 节点（非整个 doc）
+ * clone 后预处理，返回 <body>innerHTML</body> 字符串供 turndown 转换。
+ * Ported from Share to Save content-converter.ts:136-267 buildCleanHtml(). Clones the #js_content
+ * node (not whole doc), preprocesses, returns <body>innerHTML</body> string for turndown conversion.
+ *
+ * 与 buildCleanWeChatDom(doc) 区别：后者对整个 body 返回 Document 给 defuddle（回退路径用）；
+ * 本函数对 #js_content 节点返回 HTML 字符串给 turndown（主路径用）。
+ * Differs from buildCleanWeChatDom(doc): that one returns a Document for defuddle (fallback path);
+ * this returns an HTML string of #js_content for turndown (main path).
+ */
+function buildCleanWeChatHtml(el: HTMLElement, doc: Document): string {
+	const clone = el.cloneNode(true) as HTMLElement;
+
+	// 0. 扁平化嵌套 bold + bold 结束标签后补空格（turndown 转换前 DOM 预处理）
+	// 0. Flatten nested bold + ensure space after bold closing tag (DOM preprocess before turndown)
+	// 必须在 turndown 前做：解决 ****text****（嵌套 strong）和 bold 跨 br 导致 ** 换行
+	// Must run before turndown: fixes ****text**** (nested strong) and bold across <br> causing ** on new line
+	normalizeBoldElements(clone);
+
+	// 1. <img data-src> → <img src>（参考 content-converter.ts:148-154） / Promote data-src on img
+	clone.querySelectorAll('img').forEach(img => {
+		const ds = img.getAttribute('data-src');
+		const currentSrc = img.getAttribute('src') || '';
+		if (ds && (!currentSrc || currentSrc.startsWith('data:') || currentSrc.includes('pic_blank'))) {
+			img.setAttribute('src', ds);
+		}
+	});
+
+	// 2. Swiper 懒加载：父级 <div data-src> → 子 <img src>（参考 content-converter.ts:156-167）
+	// Swiper lazy load: parent <div data-src> → child <img src>
+	clone.querySelectorAll('[data-src]').forEach(node => {
+		if (node.tagName === 'IMG') return;
+		const ds = node.getAttribute('data-src');
+		if (!ds) return;
+		node.querySelectorAll('img').forEach(img => {
+			if (!img.getAttribute('src') || img.src.includes('pic_blank')) {
+				img.setAttribute('src', ds);
+			}
+		});
+	});
+
+	// 3. 移除微信 UI 元素 + 营销审核遮罩（参考 content-converter.ts:169-189 + 当前项目遮罩移除）
+	// Remove WeChat UI elements + marketing-review overlay
+	const uiSelectors = [
+		'.reward_area', '.reward_qrcode', '.reward_setting',
+		'.profile_area', '.profile_inner',
+		'.rich_media_area_extra', '.rich_media_meta_list',
+		'.reward_area-normal', '.reward_user',
+		'#js_pc_qr_code', '.qr_code_pc_outer',
+		'[class*="reward"]', '[class*="赞赏"]',
+		'#js_reward_area', '#js_bottom_ad',
+		'.original_panel', '.global_vip_guide',
+		'mp-common-profile', 'mp-common-mpaudio',
+		'.share_media_swiper_placeholder',
+		'.swiper_indicator_wrp',
+		'.swiper_indicator_wrp_pc',
+		'.right-bottom_area',
+		// 营销审核警告遮罩：微信 JS 渲染后叠加的"未经审核"半屏弹窗（正文可见,遮罩是独立浮层）
+		// Marketing-review overlay: half-screen dialog injected by WeChat JS (body visible, overlay is separate)
+		'.weui-half-screen-dialog',
+		'.ad_control-tips',
+		'[class*="ad_control"]',
+		'.pay_area',
+		'.wx_bottom_modal',
+	];
+	uiSelectors.forEach(sel => {
+		try { clone.querySelectorAll(sel).forEach(n => n.remove()); } catch { /* skip */ }
+	});
+
+	// 4. 代码块预处理（参考 content-converter.ts:191-228） / Code block preprocessing
+	// a) code-snippet__fix 老格式：移除行号 <ul>，解包 <section> / Old format: remove line number <ul>, unwrap <section>
+	clone.querySelectorAll('.code-snippet__fix').forEach(section => {
+		section.querySelectorAll('.code-snippet__line-index').forEach(node => node.remove());
+		const p = section.parentNode;
+		if (p) {
+			while (section.firstChild) p.insertBefore(section.firstChild, section);
+			section.remove();
+		}
+	});
+	// b) <pre> 内多 <code> 合并为单 <code> + data-lang → class / Merge multi <code> into single <code> + data-lang to class
+	clone.querySelectorAll('pre').forEach(pre => {
+		const codeEls = Array.from(pre.querySelectorAll(':scope > code'));
+		if (codeEls.length > 1) {
+			const lines = codeEls.map(c => c.textContent || '');
+			const lang = pre.getAttribute('data-lang') || '';
+			pre.innerHTML = '';
+			const newCode = doc.createElement('code');
+			if (lang) newCode.className = `language-${lang}`;
+			newCode.textContent = lines.join('\n');
+			pre.appendChild(newCode);
+		} else if (codeEls.length === 1 && pre.getAttribute('data-lang')) {
+			(codeEls[0] as Element).classList.add(`language-${pre.getAttribute('data-lang')}`);
+		}
+		// c) 解包所有 <span> 标签（移除语法高亮标签）/ Unwrap all <span> (remove syntax highlight tags)
+		pre.querySelectorAll('span').forEach(span => {
+			const sp = span.parentNode;
+			if (sp) {
+				while (span.firstChild) sp.insertBefore(span.firstChild, span);
+				span.remove();
+			}
+		});
+		// d) <br> → 换行符 / <br> → newline
+		pre.querySelectorAll('br').forEach(br => {
+			br.replaceWith(doc.createTextNode('\n'));
+		});
+	});
+
+	// 5. 图片去重：按 URL pathname，消除 Swiper 循环复制（参考 content-converter.ts:229-244）
+	// Image dedup: by URL pathname, eliminate Swiper loop duplicates
+	const seenPathnames = new Set<string>();
+	clone.querySelectorAll('img').forEach(img => {
+		const url = img.getAttribute('src') || '';
+		if (!url || !/^https?:\/\//.test(url)) return;
+		try {
+			const p = new URL(url);
+			const key = p.hostname.endsWith('.qpic.cn') ? p.origin + p.pathname : url;
+			if (seenPathnames.has(key)) {
+				img.remove();
+			} else {
+				seenPathnames.add(key);
+			}
+		} catch { /* keep image if URL parse fails */ }
+	});
+
+	// 6. 合并微信伪列表项：<section>• </section><section>正文</section> → 单行 "• 正文"
+	// Merge WeChat pseudo-list items: inline marker <section> + content <section> → single element
+	// 微信编辑器用 flexbox section 模拟列表而非 <ul>/<li>, turndown 不识别会把 marker 和内容各转独立段落。
+	// WeChat editor uses flexbox sections to simulate lists instead of <ul>/<li>;
+	// turndown doesn't recognize this, producing separate paragraphs for marker and content.
+	const MARKER_PATTERN = /^(?:[•●○]|\d+[.、])\s*$/;
+	clone.querySelectorAll('section').forEach(outerSection => {
+		const children = Array.from(outerSection.children);
+		if (children.length < 2) return;
+
+		const firstChild = children[0] as HTMLElement;
+		const markerText = (firstChild.textContent || '').trim();
+		if (!MARKER_PATTERN.test(markerText)) return;
+
+		// 将 marker 文本前置到第二个子元素内容开头 / Prepend marker text to second child's content
+		const secondChild = children[1] as HTMLElement;
+		// 保留 secondChild 内部结构（可能有 <strong>, <code> 等），只在前加文本节点
+		// Preserve secondChild's inner structure, just prepend a text node
+		const textNode = doc.createTextNode(markerText + ' ');
+		secondChild.insertBefore(textNode, secondChild.firstChild);
+
+		// 移除空的 marker 元素 / Remove the now-empty marker element
+		firstChild.remove();
+	});
+
+	return `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${clone.innerHTML}</body>`;
+}
 
 /**
  * 标准化 mmbiz 图片 URL 用于去重（去除查询参数，统一子域名）
@@ -671,18 +1043,27 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 	// 区域 1 #js_content（文字 + 类型 A 图片）先于区域 2 .img_swiper_area（类型 B 图片）
 	// Area 1 #js_content (text + Type A images) before Area 2 .img_swiper_area (Type B images)
 	if (hasJsContent || hasSwiperImages) {
-		// DOM 预处理 / DOM preprocessing (ref: buildCleanWeChatDom)
+		// 区域 2 仍用 cleanedDoc（buildCleanWeChatDom 对整个 body, swiper 区在 body内）
+		// Area 2 still uses cleanedDoc (buildCleanWeChatDom covers whole body, swiper is inside)
 		const cleanedDoc = buildCleanWeChatDom(doc);
 		const parts: string[] = [];
 
-		let area1Meta: HtmlToMdResult | null = null;
-
-		// 区域 1: #js_content — 文字 + 类型 A 图片（先入队）
-		// Area 1: #js_content — text + Type A images (first in queue)
-		if (hasJsContent) {
-			area1Meta = convertHtmlToMarkdown(html, { url, contentSelector: '#js_content', doc: cleanedDoc });
-			if (area1Meta.content?.trim()) {
-				parts.push(area1Meta.content);
+		// 区域 1: #js_content — 文字 + 类型 A 图片（turndown 直取节点）
+		// Area 1: #js_content — text + Type A images (turndown direct node conversion)
+		// defuddle 对微信 flexbox <section> 伪结构无法识别,导致结构塌缩 + 正文丢失(实测
+		// 只剩遮罩词或塌缩成一坨)。改用 turndown 直取 #js_content 节点,结构/列表/图片全保真。
+		// defuddle can't parse WeChat flexbox <section> pseudo-structure, collapsing content
+		// (measured: only overlay text or collapsed blob). Use turndown on #js_content node directly;
+		// structure/list/images all preserved.
+		let area1Content = '';
+		if (hasJsContent && jsContent) {
+			const cleanedHtml = buildCleanWeChatHtml(jsContent, doc);
+			area1Content = getWeChatTurndown().turndown(cleanedHtml);
+			// Markdown 后处理：修复跨行 bold + 合并多余空行（turndown 对微信 section 的格式问题）
+			// Markdown postprocess: fix multiline bold + collapse excess blank lines (turndown WeChat section issues)
+			area1Content = cleanWeChatWhitespace(normalizeBoldMarkers(area1Content));
+			if (area1Content.trim()) {
+				parts.push(area1Content);
 			}
 		}
 
@@ -697,19 +1078,21 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 
 		if (parts.length > 0) {
 			const publishTime = extractWeChatPublishTime(html);
-			// 作者补充：defuddle 可能提取不到，从 .wx_follow_nickname 补充（参考 content-converter.ts:90-95）
-			// Author supplement: defuddle may miss it; use .wx_follow_nickname (ref: content-converter.ts:90-95)
-			let author = area1Meta?.author || '';
-			if (!author) {
-				author = doc.querySelector('.wx_follow_nickname')?.textContent?.trim()
-					|| doc.querySelector('#js_name')?.textContent?.trim()
-					|| '';
-			}
+			// 作者补充：从 .wx_follow_nickname / #js_name（参考 content-converter.ts:90-95）
+			// Author supplement: from .wx_follow_nickname / #js_name (ref: content-converter.ts:90-95)
+			let author = doc.querySelector('.wx_follow_nickname')?.textContent?.trim()
+				|| doc.querySelector('#js_name')?.textContent?.trim()
+				|| '';
+			// 标题补充：turndown 不返回元数据,从 #activity-name / og:title 取
+			// Title supplement: turndown returns no metadata, get from #activity-name / og:title
+			const title = doc.getElementById('activity-name')?.textContent?.trim()
+				|| doc.querySelector('meta[property="og:title"]')?.getAttribute('content')?.trim()
+				|| '';
 
 			const result: HtmlToMdResult = {
-				title: area1Meta?.title || '',
+				title,
 				author,
-				published: area1Meta?.published || publishTime || '',
+				published: publishTime || '',
 				content: parts.join('\n'),
 			};
 

@@ -13,7 +13,9 @@
 	"keywords": [],
 	"license": "MIT",
 	"devDependencies": {
+		"@joplin/turndown-plugin-gfm": "^1.0.67",
 		"@types/node": "^22.20.0",
+		"@types/turndown": "^5.0.6",
 		"esbuild": "0.25.5",
 		"eslint": "^9.39.4",
 		"eslint-plugin-obsidianmd": "^0.4.0",
@@ -25,6 +27,7 @@
 	},
 	"dependencies": {
 		"defuddle": "^0.18.1",
-		"obsidian": "^1.13.1"
+		"obsidian": "^1.13.1",
+		"turndown": "^7.2.4"
 	}
 }
