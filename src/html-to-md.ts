@@ -731,7 +731,8 @@ function normalizeBoldElements(root: HTMLElement): void {
 		}
 		// 元素节点：中间无文本节点则插入空格 / Element node: insert space if no text node between
 		if (next.nodeType === 1 && el.nextSibling === next) {
-			el.parentNode?.insertBefore(document.createTextNode(' '), next);
+			// 用 ownerDocument 而非全局 document，兼容 popout 窗口 / Use ownerDocument instead of global document for popout window compatibility
+			el.parentNode?.insertBefore(el.ownerDocument.createTextNode(' '), next);
 		}
 	});
 }
@@ -762,12 +763,14 @@ function normalizeBoldMarkers(md: string): string {
  * turndown outputs many consecutive blank lines for empty WeChat <section>, rendering as large gaps.
  */
 function cleanWeChatWhitespace(md: string): string {
+	// trimEnd 在部分 lib 配置下缺类型声明退化为 any，用 replace 等价去除尾部空白
+	// trimEnd lacks type decl under some lib configs degrading to any; use replace instead
 	return md
 		.split('\n')
-		.map(line => line.trim() ? line.trimEnd() : '')
+		.map(line => line.trim() ? line.replace(/\s+$/, '') : '')
 		.join('\n')
 		.replace(/\n{3,}/g, '\n\n')
-		.trimEnd();
+		.replace(/\s+$/, '');
 }
 
 /**
