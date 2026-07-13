@@ -136,7 +136,9 @@ function extractWeChatPublishTime(html: string): string | null {
 	const ctMatch = html.match(/var\s+ct\s*=\s*["'](\d+)["']/);
 	if (ctMatch?.[1]) {
 		try {
-			const date = new Date(Number(ctMatch[1]) * 1000);
+			// Unix 时间戳 → 北京时间 (UTC+8)：+8h 后用 UTC 方法输出（与知乎/小红书一致）
+			// Unix timestamp → Beijing time (UTC+8): +8h then UTC methods output (same as Zhihu/XHS)
+			const date = new Date(Number(ctMatch[1]) * 1000 + 8 * 60 * 60 * 1000);
 			if (!isNaN(date.getTime())) {
 				return date.toISOString().slice(0, 19);
 			}
@@ -148,16 +150,19 @@ function extractWeChatPublishTime(html: string): string | null {
 	// 匹配多种赋值格式 / Match multiple assignment formats:
 	//   create_time: JsDecode('1234567890')
 	//   create_time: "1234567890"
-	//   create_time: '1234567890'
+	//   var create_time = '1234567890'  (参考 Share to Save metadata-extractor.ts:229)
 	const ctPatterns = [
 		/create_time\s*[:=]\s*JsDecode\s*\(\s*['"](\d{10})['"]\s*\)/i,
 		/create_time\s*[:=]\s*['"](\d{10})['"]/i,
+		/var\s+create_time\s*=\s*['"](\d{10})['"]/i,
 	];
 	for (const re of ctPatterns) {
 		const ctMatch = html.match(re);
 		if (ctMatch?.[1]) {
 			try {
-				const date = new Date(Number(ctMatch[1]) * 1000);
+				// Unix 时间戳 → 北京时间 (UTC+8)：+8h 后用 UTC 方法输出
+				// Unix timestamp → Beijing time (UTC+8): +8h then UTC methods output
+				const date = new Date(Number(ctMatch[1]) * 1000 + 8 * 60 * 60 * 1000);
 				if (!isNaN(date.getTime())) {
 					return date.toISOString().slice(0, 19);
 				}
@@ -169,13 +174,11 @@ function extractWeChatPublishTime(html: string): string | null {
 	// Fallback to createTime variable (pre-formatted string)
 	const createMatch = html.match(/var\s+createTime\s*=\s*'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})'/);
 	if (createMatch?.[1]) {
-		try {
-			// "2026-04-26 15:30" → "2026-04-26T15:30"
-			const date = new Date(createMatch[1].replace(' ', 'T'));
-			if (!isNaN(date.getTime())) {
-				return date.toISOString().slice(0, 19);
-			}
-		} catch { /* ignore */ }
+		// createTime 字符串 "2026-04-26 15:30" 已是北京时间（预格式化），直接拼接输出避免时区转换
+		// createTime string "2026-04-26 15:30" is already Beijing time (pre-formatted), concat directly to avoid timezone conversion
+		// new Date(本地解析) + toISOString 会在非 UTC+8 机器偏移，故不走 Date 转换
+		// new Date(local parse) + toISOString shifts on non-UTC+8 machines, so skip Date conversion
+		return createMatch[1].replace(' ', 'T') + ':00';
 	}
 
 	return null;
@@ -773,6 +776,88 @@ function cleanWeChatWhitespace(md: string): string {
 		.replace(/\s+$/, '');
 }
 
+// ─── HTML 角括号保护 / HTML Angle Bracket Protection ──
+// 照搬 Share to Save: text-utils.ts:170-250. 防止 DOMParser 解码 &lt;/&gt; 后 turndown 输出原始 HTML 标签
+// Ported from Share to Save text-utils.ts:170-250. Prevent DOMParser decoding &lt;/&gt; then turndown emitting raw HTML tags
+
+/** 占位符常量 / Placeholder constants */
+const ANGLT = 'ANGLT';
+const ANGGT = 'ANGGT';
+/** 代码块保护占位符 / Code block protection sentinel */
+const ANGLT_BLOCK = 'ANGLT_CODEBLOCK_';
+
+/**
+ * 预处理：将所有 &lt; &gt; 替换为占位符，防止 DOMParser 解码后 Turndown 输出原始 HTML 标签
+ * Pre-process: replace all &lt; &gt; with placeholders to prevent raw HTML tags in markdown output.
+ *
+ * 微信技术类文章常含 &lt;div&gt; 等 HTML 标签实体，DOMParser 解码后 turndown 会输出原始 <div> 污染 Markdown。
+ * 此函数在 DOMParser 之前把实体替换为占位符，由 restoreAngleBrackets 后处理还原为行内代码。
+ * WeChat technical articles often contain &lt;div&gt; entities; DOMParser decodes them and turndown emits raw <div>.
+ * This replaces entities with placeholders before DOMParser; restoreAngleBrackets restores them as inline code.
+ *
+ * 参照 Share to Save: text-utils.ts:187-208 protectAngleBrackets()
+ */
+function protectAngleBrackets(html: string): string {
+	// 单遍替换：遇到 code/pre/title 块保持原样，其余 &lt;→ANGLT、&gt;→ANGGT
+	// Single-pass: preserve code/pre/title blocks, replace other &lt;/&gt; with placeholders
+	let blockIndex = 0;
+	const blocks: string[] = [];
+	return html.replace(
+		/<(code|pre|title)\b[^>]*>[\s\S]*?<\/\1>|&lt;|&gt;/gi,
+		match => {
+			// code/pre/title 块 → 暂存并返回唯一占位符 / block → stash and return unique placeholder
+			if (match.startsWith('<')) {
+				blocks.push(match);
+				return `${ANGLT_BLOCK}${blockIndex++}`;
+			}
+			if (match === '&lt;') return ANGLT;
+			if (match === '&gt;') return ANGGT;
+			return match;
+		},
+	).replace(
+		new RegExp(`${ANGLT_BLOCK}(\\d+)`, 'g'),
+		(_, idx) => blocks[parseInt(idx as string, 10)] ?? '',
+	);
+}
+
+/**
+ * 后处理：恢复占位符，将 HTML 标签示例包裹为行内代码，其余保留为实体编码
+ * Post-process: restore placeholders, wrap HTML tag patterns as inline code, others as entities.
+ *
+ * 在 Markdown 输出上操作（此时 < 是安全文本字符，不会被解析为 HTML），
+ * 检测 ANGLT + 标签名 + ANGGT 模式转为 `<tag>`。
+ * Operates on markdown where < is safe text (not parsed as HTML),
+ * detects ANGLT + tag name + ANGGT pattern → `<tag>`.
+ *
+ * 参照 Share to Save: text-utils.ts:227-250 restoreAngleBrackets()
+ */
+function restoreAngleBrackets(markdown: string): string {
+	// 快速短路：不含占位符时无需处理 / Fast path: skip if no placeholders
+	if (!markdown.includes(ANGLT) && !markdown.includes(ANGGT)) return markdown;
+
+	// 1. HTML 标签模式：ANGLT + 标签名 + 内容 + ANGGT → `<tag>`
+	// 匹配 ANGLT(标签名+属性)ANGGT，其中标签名必须以字母开头
+	// 1. HTML tag pattern: ANGLT + tag name + attrs + ANGGT → `<tag>`
+	// Match ANGLT(tagname+attrs)ANGGT where tag name starts with a letter
+	markdown = markdown.replace(
+		/ANGLT(\/?[a-zA-Z][\w-]*(?:\s+(?:[\w:-]+(?:\s*=\s*(?:"[^">]*"|'[^'>]*'|[^\s"'>]+))?)*)*\s*)ANGGT/g,
+		(_full, inner: string) => {
+			// 确保是合法 HTML 标签名（可选 / 后为字母）/ Ensure valid HTML tag name (optional / then letter)
+			if (!/^[a-zA-Z]/.test(inner.replace(/^\//, ''))) {
+				return _full;
+			}
+			return `\`<${inner}>\``;
+		},
+	);
+
+	// 2. 其余 standalone 占位符 → 实体编码 / Remaining standalone placeholders → entity encoding
+	markdown = markdown
+		.replace(/ANGLT/g, '&lt;')
+		.replace(/ANGGT/g, '&gt;');
+
+	return markdown;
+}
+
 /**
  * 微信 #js_content 节点预处理：data-src 提升、UI 移除、代码块、图片去重、伪列表合并 → 干净 HTML 字符串
  * WeChat #js_content node preprocessing: data-src promotion, UI removal, code blocks, image dedup, pseudo-list merge → clean HTML string
@@ -1025,8 +1110,11 @@ function extractWeChatImages(doc: Document, existingContent: string): string {
 }
 
 export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToMdResult {
+	// 预处理：保护 &lt;/&gt; 角括号，防止 DOMParser 解码后 turndown 输出原始 HTML 标签
+	// Pre-process: protect &lt;/&gt; angle brackets, prevent DOMParser decoding then turndown emitting raw HTML
+	const protectedHtml = protectAngleBrackets(html);
 	const parser = new DOMParser();
-	const doc = parser.parseFromString(html, 'text/html');
+	const doc = parser.parseFromString(protectedHtml, 'text/html');
 
 	// 拦截页快速返回空内容，让调用方进入 headless 或兜底
 	// Block page fast return empty content, let caller fall back to headless or placeholder
@@ -1062,9 +1150,15 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 		if (hasJsContent && jsContent) {
 			const cleanedHtml = buildCleanWeChatHtml(jsContent, doc);
 			area1Content = getWeChatTurndown().turndown(cleanedHtml);
-			// Markdown 后处理：修复跨行 bold + 合并多余空行（turndown 对微信 section 的格式问题）
-			// Markdown postprocess: fix multiline bold + collapse excess blank lines (turndown WeChat section issues)
-			area1Content = cleanWeChatWhitespace(normalizeBoldMarkers(area1Content));
+			// 后处理管线（对齐 Share to Save postprocessContent）
+			// Post-processing pipeline (aligned with Share to Save postprocessContent)
+			// 顺序：还原角括号占位符 → Tab→空格 → 修复跨行bold → 折叠断裂链接 → 合并空行
+			// Order: restore angle brackets → Tab→space → fix multiline bold → collapse broken links → collapse blank lines
+			area1Content = restoreAngleBrackets(area1Content);
+			area1Content = area1Content.replace(/\t/g, ' ');
+			area1Content = normalizeBoldMarkers(area1Content);
+			area1Content = collapseZhihuMultilineLinks(area1Content);
+			area1Content = cleanWeChatWhitespace(area1Content);
 			if (area1Content.trim()) {
 				parts.push(area1Content);
 			}
@@ -1159,6 +1253,10 @@ export function convertWeChatHtmlToMarkdown(html: string, url?: string): HtmlToM
 			|| doc.querySelector('#js_name')?.textContent?.trim()
 			|| '';
 	}
+
+	// 后处理防御：回退路径 defuddle 在 protected doc 上跑，输出含 ANGLT/ANGGT 占位符需还原
+	// Post-processing defense: fallback defuddle runs on protected doc, output contains ANGLT/ANGGT placeholders to restore
+	result.content = collapseZhihuMultilineLinks(restoreAngleBrackets(result.content));
 
 	return result;
 }
