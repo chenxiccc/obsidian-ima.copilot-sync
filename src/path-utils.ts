@@ -101,6 +101,131 @@ export async function ensureFolder(vault: Vault, folderPath: string): Promise<vo
 	}
 }
 
+/**
+ * 递归列出文件夹下所有 .md 文件（vault 相对路径）
+ * Recursively list all .md files under a folder (vault-relative paths)
+ *
+ * 用 adapter.list 而非 metadataCache/fileMap：读盘兜底，索引未就绪时同样可用
+ * Uses adapter.list instead of metadataCache/fileMap: disk-based fallback, works while the cache isn't ready
+ */
+export async function listMdPathsInFolder(vault: Vault, folderPath: string): Promise<string[]> {
+	const result: string[] = [];
+	const stack = [normalizePath(folderPath)];
+
+	while (stack.length > 0) {
+		const current = stack.pop()!;
+		try {
+			const listed = await vault.adapter.list(current);
+			for (const file of listed.files) {
+				if (file.endsWith('.md')) {
+					result.push(normalizePath(file)); // adapter.list() 返回 vault 相对路径 / adapter.list() returns vault-relative paths
+				}
+			}
+			for (const folder of listed.folders) {
+				stack.push(normalizePath(folder));
+			}
+		} catch {
+			// 文件夹不存在时跳过 / Skip if folder doesn't exist
+		}
+	}
+
+	return result;
+}
+
+// ─── 同步标识解析（读盘兜底）/ Sync identifier parsing (disk fallback) ────────
+
+/**
+ * 从文件内容开头的 YAML frontmatter 中读取指定字段
+ * Read a field from the leading YAML frontmatter of a file's content
+ *
+ * 不依赖 metadataCache：Obsidian 尚未索引（或 YAML 解析失败）时仍可识别 media_id/docid
+ * Does not rely on metadataCache: still resolves media_id/docid when Obsidian hasn't indexed yet
+ * (or when its YAML parse failed)
+ */
+export function extractFrontmatterValue(content: string, key: string): string | null {
+	if (!content) return null;
+	// 去掉 BOM / Strip BOM
+	const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+	const lines = text.split('\n');
+	// frontmatter 必须位于文件首行 / Frontmatter must start on the first line
+	if ((lines[0] ?? '').replace(/\r$/, '').trim() !== '---') return null;
+
+	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const matcher = new RegExp(`^${escapedKey}\\s*:\\s*(.*)$`);
+
+	for (let i = 1; i < lines.length; i++) {
+		const line = (lines[i] ?? '').replace(/\r$/, '');
+		if (line.trim() === '---') break; // frontmatter 结束 / End of frontmatter
+		const match = matcher.exec(line);
+		if (!match) continue;
+
+		let value = (match[1] ?? '').trim();
+		// 去成对引号 / Strip surrounding quotes
+		const quote = value.charAt(0);
+		if (value.length > 1 && (quote === '"' || quote === "'") && value.charAt(value.length - 1) === quote) {
+			value = value.slice(1, -1);
+		}
+		return value.length > 0 ? value : null;
+	}
+
+	return null;
+}
+
+// ─── 文件名与重复副本判据 / Filenames and duplicate-copy detection ───────────
+
+/** 同步标识的短后缀（末 12 位，非单词字符归一为下划线）/ Short suffix of a sync id (last 12 chars, non-word chars → underscore) */
+export function shortIdOf(uniqueId: string): string {
+	return uniqueId.replace(/\W+/g, '_').slice(-12);
+}
+
+/** 提取笔记文件名基名（去目录、去扩展名）/ Extract note file basename (no directory, no extension) */
+export function extractNoteBaseName(filePath: string): string {
+	const name = filePath.split('/').pop() ?? '';
+	const dot = name.lastIndexOf('.');
+	return dot > 0 ? name.slice(0, dot) : name;
+}
+
+/** 判断文件名是否为「原名-同步标识后缀」形式的副本 / Whether a basename is a "<name>-<short id>" copy */
+export function isSuffixedCopyName(basename: string, uniqueId: string): boolean {
+	const suffix = `-${shortIdOf(uniqueId)}`;
+	return basename.length > suffix.length && basename.endsWith(suffix);
+}
+
+/**
+ * 归一化笔记正文用于重复副本比对：去 frontmatter、清空链接目标、折叠空白
+ * Normalize a note body for duplicate comparison: drop frontmatter, blank out link targets, collapse whitespace
+ *
+ * 同一篇被重复落盘时，图片/附件文件名会带上级联后缀（…-hex12-hash.png），
+ * 因此必须忽略链接目标本身，只比较正文结构
+ * A duplicated note has cascaded-suffix attachment names (…-hex12-hash.png), so link targets
+ * themselves must be ignored; only the body structure is compared
+ */
+export function normalizeNoteBodyForCompare(content: string): string {
+	const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+	const lines = text.split('\n');
+	let body = text;
+
+	if ((lines[0] ?? '').replace(/\r$/, '').trim() === '---') {
+		for (let i = 1; i < lines.length; i++) {
+			if ((lines[i] ?? '').replace(/\r$/, '').trim() === '---') {
+				body = lines.slice(i + 1).join('\n');
+				break;
+			}
+		}
+	}
+
+	// wikilink / embed：保留 alias，清空目标 / Wikilink and embed: keep alias, drop target
+	body = body.replace(/(!?)\[\[([^\]]*)\]\]/g, (_match: string, bang: string, inner: string) => {
+		const bar = inner.indexOf('|');
+		return bar >= 0 ? `${bang}[[${inner.slice(bar)}]]` : `${bang}[[]]`;
+	});
+	// Markdown 图片与链接：保留 alt/text，清空路径 / Markdown images and links: keep alt/text, drop path
+	body = body.replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match: string, alt: string) => `![${alt}]()`);
+	body = body.replace(/\[([^\]]*)\]\([^)]*\)/g, (_match: string, label: string) => `[${label}]()`);
+
+	return body.replace(/\s+/g, ' ').trim();
+}
+
 // CHROME_UA 已迁移至 http-utils.ts，此处重导出以保持向后兼容
 // CHROME_UA moved to http-utils.ts, re-exported here for backward compatibility
 export { CHROME_UA } from './http-utils';

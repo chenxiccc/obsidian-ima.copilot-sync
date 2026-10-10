@@ -68,6 +68,15 @@ export default class ImaPlugin extends Plugin {
 			},
 		});
 
+		// 清理历史重复副本（同名-<同步标识后缀>）/ Clean legacy duplicate copies ("<name>-<sync id suffix>")
+		this.addCommand({
+			id: 'ima-cleanup-duplicate-copies',
+			name: '清理重复副本（同名-同步标识后缀）',
+			callback: () => {
+				void this.syncManager.cleanupDuplicateCopies();
+			},
+		});
+
 		// ── 设置界面 / Settings tab ──────────────────────────────────────────
 		this.addSettingTab(new ImaSettingTab(this.app, this));
 

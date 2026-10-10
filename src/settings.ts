@@ -99,7 +99,7 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 
 // ─── 确认对话框（取消/删除知识库时询问是否清理本地文件）/ Confirm modal for KB removal ──
 
-class ConfirmModal extends Modal {
+export class ConfirmModal extends Modal {
 	// 'confirmed' | 'cancelled' | 'dismissed'
 	private result: 'confirmed' | 'cancelled' | 'dismissed' = 'dismissed';
 

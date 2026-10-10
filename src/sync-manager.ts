@@ -1,5 +1,8 @@
 import { App, Platform, Vault, Notice, normalizePath, TFile, requestUrl } from 'obsidian';
+import { ConfirmModal } from './settings';
 import type { ImaPluginSettings } from './settings';
+import { findDuplicateCopies } from './duplicate-cleanup';
+import type { DuplicatePair } from './duplicate-cleanup';
 import type { AttachmentOptions } from './path-utils';
 import type { KnowledgeInfo, PublicKBItem, PublicKnowledgeBase } from './ima-client';
 import { ImaClient, ImaPublicClient, formatImaError, isImaApiError, isRateLimitError } from './ima-client';
@@ -7,7 +10,7 @@ import { ImageHandler } from './image-handler';
 import { convertHtmlToMarkdown, convertWeChatHtmlToMarkdown, convertXiaohongshuHtmlToMarkdown, convertZhihuHtmlToMarkdown, isXiaohongshuUrl } from './html-to-md';
 import type { HtmlToMdResult } from './html-to-md';
 import { FileDownloader } from './file-downloader';
-import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash, classifyUrl } from './path-utils';
+import { sanitizeFilename, buildStableFilename, ensureFolder, escapeInlineHash, classifyUrl, extractFrontmatterValue, extractNoteBaseName, isSuffixedCopyName, listMdPathsInFolder, shortIdOf } from './path-utils';
 import { buildHeaders } from './http-utils';
 import { HeadlessExtractor } from './headless-extractor';
 
@@ -53,6 +56,19 @@ interface SyncMediaParams {
 	mediaId: string;
 }
 
+/** 同步标识字段名 / Frontmatter key holding the sync identifier */
+type SyncIdKey = 'media_id' | 'docid';
+
+/** 一个 id 可能对应多份本地文件（历史重复副本）/ One id may map to several local files (legacy duplicates) */
+interface ExistingScan {
+	/** 同步标识 → 本地路径（规范路径优先）/ Sync id → local paths (canonical path first) */
+	byId: Map<string, string[]>;
+	/** 扫描到的 .md 总数 / Total .md files scanned */
+	mdCount: number;
+	/** 其中靠读盘兜底才读到标识的数量 / How many ids needed the disk fallback */
+	diskFallbackCount: number;
+}
+
 export class SyncManager {
 	private client: ImaClient | null = null;
 	private publicClient = new ImaPublicClient();
@@ -61,6 +77,14 @@ export class SyncManager {
 	private isSyncing = false;
 	private headlessExtractor: HeadlessExtractor;
 	private debugConfig?: { adapter: import('obsidian').DataAdapter; path: string };
+	/**
+	 * 单轮同步内的附件引用索引：笔记路径 → 引用的附件文件名
+	 * Per-run attachment reference index: note path → referenced attachment filenames
+	 *
+	 * metadataCache 未就绪时的读盘结果缓存，避免每次孤儿清理都全量读盘
+	 * Caches disk-read results when metadataCache isn't ready, avoiding a full re-read per orphan cleanup
+	 */
+	private readonly refIndex = new Map<string, Set<string>>();
 
 	constructor(
 		private readonly app: App,
@@ -171,6 +195,8 @@ export class SyncManager {
 	private async doSync(): Promise<number> {
 		const syncFolder = normalizePath(this.settings.syncFolder);
 		const opts = this.buildAttachmentOptions();
+		// 新的一轮同步：清空上一轮的附件引用缓存 / New sync run: clear the previous run's attachment reference cache
+		this.refIndex.clear();
 		// 个人笔记的图片和文件强制下载到本地，避免 COS 签名 URL 约 8 小时过期
 		// Force download images and files for personal notes to avoid expired COS signed URLs (~8h TTL)
 		opts.downloadImages = true;
@@ -193,30 +219,37 @@ export class SyncManager {
 			// Fetch all notes, filter incrementally in memory (align with KB pattern, one request for both)
 			const allNotes = await this.client.listAllNotes(0);
 			const existingMap = await this.scanExistingNoteFiles(syncFolder);
+			const skipCreation = this.isIndexSuspicious(existingMap, '个人笔记');
 
 			// 删除同步：本地有 docid 但 API 已无 / Delete sync: local has docid but not in API
 			const apiDocIds = new Set(allNotes.map(n => n.docid));
-			for (const [docid, filePath] of existingMap) {
+			for (const [docid, filePaths] of existingMap.byId) {
 				if (!apiDocIds.has(docid)) {
-					try {
-						await this.handleDeletedItem(filePath, opts);
-					} catch (err) {
-						console.warn(`ima.copilot Sync: 笔记删除同步失败 / Note delete sync failed for ${filePath}:`, err);
+					// 同一 docid 的历史副本一并回收 / Recycle every legacy copy of the same docid
+					for (const filePath of filePaths) {
+						try {
+							await this.handleDeletedItem(filePath, opts);
+						} catch (err) {
+							console.warn(`ima.copilot Sync: 笔记删除同步失败 / Note delete sync failed for ${filePath}:`, err);
+						}
 					}
-					existingMap.delete(docid);
+					existingMap.byId.delete(docid);
 				}
 			}
 
 			// 增量同步：新笔记，或上次同步后有修改的 / Incremental sync: new or modified since last sync
-			for (const note of allNotes) {
+			const notesToCreate = skipCreation ? [] : allNotes;
+			for (const note of notesToCreate) {
 				try {
 					// modify_time 为毫秒级，lastSyncTime 为毫秒级 / modify_time is ms, lastSyncTime is also ms
-					if (existingMap.has(note.docid) && note.modify_time <= this.settings.lastSyncTime) continue;
-					const filePath = this.resolveFilePath(syncFolder, note.title, note.docid);
+					if (existingMap.byId.has(note.docid) && note.modify_time <= this.settings.lastSyncTime) continue;
+					const filePath = await this.resolveFilePath(syncFolder, note.title, note.docid, 'docid');
 					const rawContent = await this.client.getNoteContentMarkdown(note.docid);
 					console.debug(`ima.copilot Sync: processing "${note.title}", hasFileTag=${rawContent.includes("<file")}`);
 					const withFiles = await this.processInlineFileTags(rawContent, filePath, opts);
-					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, note.title);
+					// 图片命名基名 = 笔记最终文件名基名，与是否带 id 后缀保持一致
+					// Image naming base = final note filename base, consistent with the id suffix
+					const withImages = await this.imageHandler.processContent(withFiles, filePath, opts, extractNoteBaseName(filePath));
 					const noteContent = `---\ndocid: "${note.docid}"\n---\n\n${escapeInlineHash(withImages)}`;
 					await this.writeNote(filePath, noteContent, opts);
 					syncedCount++;
@@ -258,24 +291,29 @@ export class SyncManager {
 
 					const existingMap = await this.scanExistingKbFiles(kbFolder);
 					const items = await this.client.listAllKnowledgeItems(kbId);
+					const skipCreation = this.isIndexSuspicious(existingMap, `知识库「${kbName}」`);
 
 					// 删除同步 / Delete sync
 					const apiMediaIds = new Set(items.map(i => i.media_id));
-					for (const [mediaId, filePath] of existingMap) {
+					for (const [mediaId, filePaths] of existingMap.byId) {
 						if (!apiMediaIds.has(mediaId)) {
-							try {
-								await this.handleDeletedItem(filePath, kbOpts);
-							} catch (err) {
-								console.warn(`ima.copilot Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+							// 同一 media_id 的历史副本一并回收 / Recycle every legacy copy of the same media_id
+							for (const filePath of filePaths) {
+								try {
+									await this.handleDeletedItem(filePath, kbOpts);
+								} catch (err) {
+									console.warn(`ima.copilot Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+								}
 							}
-							existingMap.delete(mediaId);
+							existingMap.byId.delete(mediaId);
 						}
 					}
 
 					// 增量同步 / Incremental sync
-					for (const item of items) {
+					const kbItemsToCreate = skipCreation ? [] : items;
+					for (const item of kbItemsToCreate) {
 						try {
-							if (existingMap.has(item.media_id)) continue;
+							if (existingMap.byId.has(item.media_id)) continue;
 							const itemFolder = item.folderPath
 								? normalizePath(`${kbFolder}/${item.folderPath}`)
 								: kbFolder;
@@ -284,7 +322,7 @@ export class SyncManager {
 								continue;
 							}
 							await ensureFolder(this.vault, itemFolder);
-							const filePath = this.resolveFilePath(itemFolder, item.title, item.media_id);
+							const filePath = await this.resolveFilePath(itemFolder, item.title, item.media_id, 'media_id');
 							const content = await this.syncKnowledgeItem(item, filePath, kbOpts);
 							if (content !== null) {
 								await this.writeNote(filePath, content, kbOpts);
@@ -440,6 +478,7 @@ export class SyncManager {
 
 		// 扫描已有文件 / Scan existing files
 		const existingMap = await this.scanExistingKbFiles(kbFolder);
+		const skipCreation = this.isIndexSuspicious(existingMap, `公共知识库「${pubKB.name}」`);
 
 		// 删除同步时包含未就绪条目，防止其被误删 / Include unready items in delete sync to prevent false deletion
 		const apiMediaIds = new Set(items.map(i => i.media_id));
@@ -450,22 +489,26 @@ export class SyncManager {
 				items.splice(i, 1);
 			}
 		}
-		for (const [mediaId, filePath] of existingMap) {
+		for (const [mediaId, filePaths] of existingMap.byId) {
 			if (!apiMediaIds.has(mediaId)) {
-				try {
-					await this.handleDeletedItem(filePath, opts);
-				} catch (err) {
-					console.warn(`ima.copilot Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+				// 同一 media_id 的历史副本一并回收 / Recycle every legacy copy of the same media_id
+				for (const filePath of filePaths) {
+					try {
+						await this.handleDeletedItem(filePath, opts);
+					} catch (err) {
+						console.warn(`ima.copilot Sync: 删除同步失败 / Delete sync failed for ${filePath}:`, err);
+					}
 				}
-				existingMap.delete(mediaId);
+				existingMap.byId.delete(mediaId);
 			}
 		}
 
 		// 增量同步 / Incremental sync
 		let count = 0;
-		for (const item of items) {
+		const pubItemsToCreate = skipCreation ? [] : items;
+		for (const item of pubItemsToCreate) {
 			try {
-				if (existingMap.has(item.media_id)) continue;
+				if (existingMap.byId.has(item.media_id)) continue;
 
 				const itemFolder = item.folderPath
 					? normalizePath(`${kbFolder}/${item.folderPath}`)
@@ -476,7 +519,7 @@ export class SyncManager {
 					continue;
 				}
 				await ensureFolder(this.vault, itemFolder);
-				const filePath = this.resolveFilePath(itemFolder, item.title, item.media_id);
+				const filePath = await this.resolveFilePath(itemFolder, item.title, item.media_id, 'media_id');
 
 				const content = await this.syncPublicKBItem(item, filePath, opts);
 				if (content !== null) {
@@ -594,75 +637,111 @@ export class SyncManager {
 	}
 
 	/**
-	 * 递归列举指定文件夹下所有 .md 文件的路径（限定目录，不触发全库扫描）
-	 * Recursively list all .md file paths under a specific folder (scoped, avoids vault-wide enumeration)
+	 * 读取某文件的同步标识：metadataCache 优先，未命中则读盘解析 frontmatter
+	 * Read a file's sync id: metadataCache first, falling back to parsing frontmatter from disk
+	 *
+	 * 读盘兜底是幂等性的关键：Obsidian 刚启动/大库重建索引时 cache 可能为空，
+	 * 只依赖 cache 会把已同步条目误判为新条目并重复落盘
+	 * The disk fallback is what makes syncing idempotent: right after startup (or while a large
+	 * vault is still being indexed) the cache can be empty, and a cache-only check would treat
+	 * already-synced items as new and write duplicates
 	 */
-	private async listMdPathsInFolder(folderPath: string): Promise<string[]> {
-		const result: string[] = [];
-		const stack = [folderPath];
+	private async readFrontmatterId(path: string, key: SyncIdKey): Promise<string | null> {
+		const cache = this.app.metadataCache.getCache(path);
+		const cached = (cache?.frontmatter as Record<string, unknown>)?.[key];
+		if (typeof cached === 'string' && cached.length > 0) return cached;
 
-		while (stack.length > 0) {
-			const current = stack.pop()!;
-			try {
-				const listed = await this.vault.adapter.list(current);
-				for (const file of listed.files) {
-					if (file.endsWith('.md')) {
-						result.push(normalizePath(file)); // adapter.list() returns vault-relative paths, use directly / vault 完整路径
-					}
-				}
-				for (const folder of listed.folders) {
-					stack.push(normalizePath(folder)); // adapter.list() returns vault-relative paths / vault 完整路径
-				}
-			} catch {
-				// 文件夹不存在时跳过 / Skip if folder doesn't exist
-			}
+		try {
+			const content = await this.vault.adapter.read(path);
+			return extractFrontmatterValue(content, key);
+		} catch (err) {
+			console.warn(`ima.copilot Sync: 读取 frontmatter 失败 / Failed to read frontmatter: ${path}`, err);
+			return null;
 		}
-
-		return result;
 	}
 
 	/**
-	 * 扫描知识库文件夹下已有 .md 文件，从 metadataCache 提取 media_id（零 I/O）
-	 * Scan existing KB .md files, extract media_id from metadataCache (zero I/O)
+	 * 汇总已同步条目的同步标识（缓存优先 + 读盘兜底）
+	 * Collect sync ids of already-synced items (cache first, disk fallback)
 	 */
-	private async scanExistingKbFiles(kbFolder: string): Promise<Map<string, string>> {
-		const map = new Map<string, string>();
-		const mdPaths = await this.listMdPathsInFolder(kbFolder);
+	private async collectExistingIds(paths: string[], key: SyncIdKey): Promise<ExistingScan> {
+		const byId = new Map<string, string[]>();
+		let diskFallbackCount = 0;
 
-		for (const path of mdPaths) {
+		for (const path of paths) {
 			const cache = this.app.metadataCache.getCache(path);
-			const mediaId = (cache?.frontmatter as Record<string, unknown>)?.['media_id'];
-			if (typeof mediaId === 'string') {
-				map.set(mediaId, path);
+			const cached = (cache?.frontmatter as Record<string, unknown>)?.[key];
+			let id: string | null = (typeof cached === 'string' && cached.length > 0) ? cached : null;
+
+			if (id === null) {
+				id = await this.readFrontmatterId(path, key);
+				if (id !== null) diskFallbackCount++;
+			}
+			if (id === null) continue;
+
+			const existing = byId.get(id);
+			if (existing) {
+				existing.push(path);
+			} else {
+				byId.set(id, [path]);
 			}
 		}
 
-		return map;
+		// 同一 id 多份文件时规范路径优先（无 -<短标识> 后缀者排前）
+		// When one id has several files, put the canonical path first (no "-<short id>" suffix)
+		for (const [id, filePaths] of byId) {
+			if (filePaths.length > 1) {
+				filePaths.sort((a, b) =>
+					Number(isSuffixedCopyName(extractNoteBaseName(a), id)) - Number(isSuffixedCopyName(extractNoteBaseName(b), id)),
+				);
+			}
+		}
+
+		if (diskFallbackCount > 0) {
+			console.debug(`ima.copilot Sync: 已同步标识 ${byId.size} 个，其中 ${diskFallbackCount} 个靠读盘兜底（metadataCache 未就绪）`);
+		}
+
+		return { byId, mdCount: paths.length, diskFallbackCount };
 	}
 
 	/**
-	 * 扫描 syncFolder 根目录下已有 .md 文件，从 metadataCache 提取 docid（零 I/O）
-	 * Scan existing note .md files in syncFolder root, extract docid from metadataCache (zero I/O)
+	 * 空索引保护：本地已有若干笔记却读不到任何同步标识时，跳过创建以免重复落盘
+	 * Empty-index guard: when local notes exist but no sync id can be read, skip creation to avoid duplicates
 	 */
-	private async scanExistingNoteFiles(syncFolder: string): Promise<Map<string, string>> {
-		const map = new Map<string, string>();
+	private isIndexSuspicious(scan: ExistingScan, label: string): boolean {
+		if (scan.mdCount < 5 || scan.byId.size > 0) return false;
+
+		console.warn(`ima.copilot Sync: ${label} 已有 ${scan.mdCount} 篇笔记但未识别到任何同步标识，跳过创建以免重复落盘`);
+		new Notice(`🐼 ima.copilot sync: ${label} 已有 ${scan.mdCount} 篇笔记但读不到同步标识，已跳过创建以免重复落盘`);
+		return true;
+	}
+
+	/**
+	 * 扫描知识库文件夹下已有 .md 文件，提取 media_id（缓存优先 + 读盘兜底）
+	 * Scan existing KB .md files, extract media_id (cache first, disk fallback)
+	 */
+	private async scanExistingKbFiles(kbFolder: string): Promise<ExistingScan> {
+		return this.collectExistingIds(await listMdPathsInFolder(this.vault, kbFolder), 'media_id');
+	}
+
+	/**
+	 * 扫描 syncFolder 根目录下已有 .md 文件，提取 docid（缓存优先 + 读盘兜底）
+	 * Scan existing note .md files in syncFolder root, extract docid (cache first, disk fallback)
+	 */
+	private async scanExistingNoteFiles(syncFolder: string): Promise<ExistingScan> {
+		const paths: string[] = [];
 		// 只取根层 .md 文件（不含子文件夹）/ Only root-level .md files (exclude subfolders)
 		try {
 			const listed = await this.vault.adapter.list(syncFolder);
 			for (const file of listed.files) {
 				if (!file.endsWith('.md')) continue;
-				const path = normalizePath(file); // adapter.list() returns vault-relative path / vault 完整路径
-				const cache = this.app.metadataCache.getCache(path);
-				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
-				if (typeof docid === 'string') {
-					map.set(docid, path);
-				}
+				paths.push(normalizePath(file)); // adapter.list() returns vault-relative path / vault 完整路径
 			}
 		} catch {
-			// 文件夹不存在时返回空 map / Return empty map if folder doesn't exist
+			// 文件夹不存在时返回空结果 / Return an empty result if folder doesn't exist
 		}
 
-		return map;
+		return this.collectExistingIds(paths, 'docid');
 	}
 
 	/**
@@ -715,7 +794,9 @@ export class SyncManager {
 			if (mediaInfo.media_type === MEDIA_TYPE_NOTE && mediaInfo.notebook_ext_info?.notebook_id) {
 				const notebookId = mediaInfo.notebook_ext_info.notebook_id;
 				const mdContent = await this.client!.getNoteContentMarkdown(notebookId);
-				const withImages = await this.imageHandler.processContent(mdContent, filePath, opts, item.title);
+				// 图片命名基名 = 笔记最终文件名基名，与是否带 id 后缀保持一致
+				// Image naming base = final note filename base, consistent with the id suffix
+				const withImages = await this.imageHandler.processContent(mdContent, filePath, opts, extractNoteBaseName(filePath));
 				return this.prependFrontmatterField(escapeInlineHash(withImages), 'media_id', item.media_id);
 			}
 
@@ -1223,7 +1304,7 @@ export class SyncManager {
 	private async fixPendingImages(syncFolder: string, opts: AttachmentOptions): Promise<void> {
 		if (!opts.downloadImages && !opts.downloadFiles) return;
 
-		const mdPaths = await this.listMdPathsInFolder(syncFolder);
+		const mdPaths = await listMdPathsInFolder(this.vault, syncFolder);
 
 		for (const path of mdPaths) {
 			// 按需将路径转为 TFile（本方法需要 vault.read/modify）
@@ -1237,21 +1318,22 @@ export class SyncManager {
 
 				// 若笔记有 docid 且认证客户端可用，重新拉 Markdown 获取新鲜图片 URL（避免 COS 临时链接过期）
 				// If note has docid and auth client is available, re-fetch Markdown for fresh image URLs (avoids expired COS signed URLs)
-				const cache = this.app.metadataCache.getCache(path);
-				const docid = (cache?.frontmatter as Record<string, unknown>)?.['docid'];
+				// docid 同样读盘兜底：metadataCache 未就绪时不至于跳过刷新分支
+				// docid also uses the disk fallback so a cold metadataCache doesn't skip the refresh branch
+				const docid = await this.readFrontmatterId(path, 'docid');
 
 				let fixed = content;
 				if (typeof docid === 'string' && this.client) {
 					try {
 						const freshMd = await this.client.getNoteContentMarkdown(docid);
-						const withImages = await this.imageHandler.processContent(freshMd, file.path, opts, file.basename);
+						const withImages = await this.imageHandler.processContent(freshMd, file.path, opts, extractNoteBaseName(file.path));
 						fixed = `---\ndocid: "${docid}"\n---\n\n${withImages}`;
 					} catch (err) {
 						console.warn(`ima.copilot Sync: 重新获取笔记内容失败，降级修复现有外链 / Re-fetch failed, falling back for ${file.path}:`, err);
 					}
 				}
 				if (fixed === content) {
-					fixed = await this.imageHandler.processContent(content, file.path, opts, file.basename);
+					fixed = await this.imageHandler.processContent(content, file.path, opts, extractNoteBaseName(file.path));
 				}
 
 				if (fixed !== content) {
@@ -1269,20 +1351,44 @@ export class SyncManager {
 	 * Write or update note file, then clean up orphan images
 	 */
 	/**
-	 * 解析唯一文件路径，避免同名标题笔记互相覆盖
-	 * Resolve unique file path to prevent same-title notes from overwriting each other
+	 * 解析唯一文件路径：同一条目复用原路径，真撞名才追加短标识
+	 * Resolve a unique file path: reuse the original path for the same item, only append a short id on a real title collision
+	 *
+	 * 幂等性核心闸门：即使判重扫描漏掉了某条目，只要同名文件的 frontmatter 标识等于当前条目，
+	 * 就原地覆盖而不是另存一份（issue #7 的重复副本就是缺了这道闸门）
+	 * The core idempotency gate: even if the dedup scan misses an item, a same-name file whose
+	 * frontmatter id equals the current item is overwritten in place instead of copied aside
+	 * (missing this gate is exactly what produced the duplicates in issue #7)
 	 */
-	private resolveFilePath(dir: string, title: string, uniqueId: string, ext = 'md'): string {
+	private async resolveFilePath(dir: string, title: string, uniqueId: string, idKey: SyncIdKey, ext = 'md'): Promise<string> {
 		const base = sanitizeFilename(title || uniqueId);
-		let filePath = normalizePath(`${dir}/${base}.${ext}`);
+		const basePath = normalizePath(`${dir}/${base}.${ext}`);
 
-		// 文件已存在且 media_id 不同 → 追加短标识 / File exists with different media_id → append short id
-		const existing = this.vault.getAbstractFileByPath(filePath);
-		if (existing instanceof TFile) {
-			const shortId = uniqueId.replace(/\W+/g, '_').slice(-12);
-			filePath = normalizePath(`${dir}/${base}-${shortId}.${ext}`);
+		const existing = this.vault.getFileByPath(basePath);
+		if (!(existing instanceof TFile)) return basePath;
+
+		// 同一条目 → 原地覆盖 / Same item → overwrite in place
+		const existingId = await this.readFrontmatterId(basePath, idKey);
+		if (existingId === uniqueId) return basePath;
+
+		// 标题真撞名 → 追加短标识；已存在且属于当前条目的后缀文件直接复用
+		// Real title collision → append the short id; an existing suffixed file for this item is reused
+		const shortId = shortIdOf(uniqueId);
+		for (let n = 1; n <= 20; n++) {
+			const candidate = normalizePath(`${dir}/${base}-${shortId}${n > 1 ? `-${n}` : ''}.${ext}`);
+			const candidateFile = this.vault.getFileByPath(candidate);
+			if (!(candidateFile instanceof TFile)) {
+				if (n === 1) {
+					console.warn(`ima.copilot Sync: 标题撞名，另存为 / Title collision, saving as: ${candidate}`);
+				}
+				return candidate;
+			}
+			if (await this.readFrontmatterId(candidate, idKey) === uniqueId) return candidate;
 		}
-		return filePath;
+
+		const fallback = normalizePath(`${dir}/${base}-${shortId}-21.${ext}`);
+		console.warn(`ima.copilot Sync: 同名文件过多，改用 / Too many same-name files, using: ${fallback}`);
+		return fallback;
 	}
 
 	private async writeNote(filePath: string, content: string, opts: AttachmentOptions): Promise<void> {
@@ -1290,7 +1396,11 @@ export class SyncManager {
 		if (existing instanceof TFile) {
 			const oldContent = await this.vault.read(existing);
 
-			if (oldContent === content) return;
+			if (oldContent === content) {
+				// 内容未变也刷新引用缓存，避免后续清理误判 / Refresh the reference cache even when unchanged
+				this.refIndex.set(filePath, this.namesFromContent(content));
+				return;
+			}
 
 			const oldImagePaths = this.imageHandler.extractLocalImagePaths(oldContent, filePath, opts);
 			const oldFilePaths = this.imageHandler.extractLocalFilePaths(oldContent, filePath, opts);
@@ -1301,11 +1411,13 @@ export class SyncManager {
 			const newFilePaths = this.imageHandler.extractLocalFilePaths(content, filePath, opts);
 			const newPaths = new Set([...newImagePaths, ...newFilePaths]);
 			const orphans = oldPaths.filter(p => !newPaths.has(p));
+			this.refIndex.set(filePath, this.namesFromContent(content));
 			if (orphans.length > 0) {
 				await this.cleanOrphanImages(orphans, filePath);
 			}
 		} else {
 			await this.vault.create(filePath, content);
+			this.refIndex.set(filePath, this.namesFromContent(content));
 		}
 	}
 
@@ -1373,30 +1485,96 @@ export class SyncManager {
 	}
 
 	/**
+	 * 从 CachedMetadata 收集某笔记引用的附件文件名；cache 缺失返回 null
+	 * Collect attachment filenames referenced by a note from CachedMetadata; null when the cache is missing
+	 */
+	private namesFromCache(path: string): Set<string> | null {
+		const cache = this.app.metadataCache.getCache(path);
+		if (!cache) return null;
+
+		const names = new Set<string>();
+		for (const embed of cache.embeds ?? []) {
+			names.add(embed.link.split('/').pop() ?? embed.link);
+		}
+		for (const link of cache.links ?? []) {
+			// 非外链的 wikilink/嵌入都算引用（含 PDF 等非图片附件，与 extractLocalFilePaths 对齐）
+			// Every non-http wikilink/embed counts as a reference (including non-image attachments, aligned with extractLocalFilePaths)
+			if (link.link.startsWith('http')) continue;
+			const decoded = link.link.split('/').map(s => decodeURIComponent(s)).join('/');
+			names.add(decoded.split('/').pop() ?? decoded);
+		}
+		return names;
+	}
+
+	/**
+	 * 从正文正则收集引用的附件文件名（metadataCache 未就绪时的兜底）
+	 * Collect referenced attachment filenames from raw content (fallback while the cache isn't ready)
+	 */
+	private namesFromContent(content: string): Set<string> {
+		const names = new Set<string>();
+		const add = (raw: string): void => {
+			const trimmed = raw.trim();
+			if (!trimmed) return;
+			const decoded = trimmed.split('/').map(s => decodeURIComponent(s)).join('/');
+			const name = decoded.split('/').pop() ?? decoded;
+			if (name) names.add(name);
+		};
+
+		let match: RegExpExecArray | null;
+		// [[file.pdf]] / ![[image.png|alt]]
+		const wikiRe = /!?\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+		while ((match = wikiRe.exec(content)) !== null) add(match[1] ?? '');
+		// [text](path) / ![alt](path)，跳过外链
+		const mdRe = /!?\[[^\]]*\]\((?!https?:\/\/)([^)\s]+)\)/g;
+		while ((match = mdRe.exec(content)) !== null) add(match[1] ?? '');
+
+		return names;
+	}
+
+	/**
+	 * 取某笔记引用的附件文件名；null 表示不可信
+	 * Referenced attachment filenames of a note; null means "unknown"
+	 */
+	private async getReferencedNames(path: string): Promise<Set<string> | null> {
+		const cached = this.namesFromCache(path);
+		if (cached) return cached;
+
+		const memo = this.refIndex.get(path);
+		if (memo) return memo;
+
+		try {
+			const content = await this.vault.adapter.read(path);
+			const names = this.namesFromContent(content);
+			this.refIndex.set(path, names);
+			return names;
+		} catch (err) {
+			console.warn(`ima.copilot Sync: 读取笔记引用失败 / Failed to read note references: ${path}`, err);
+			return null;
+		}
+	}
+
+	/**
 	 * 检查图片路径列表，删除不再被任何同步笔记引用的图片文件
 	 * Check image paths and delete files no longer referenced by any synced note
 	 *
-	 * 使用 metadataCache 替代全文件读取，零 I/O
-	 * Uses metadataCache instead of full file reads, zero I/O
+	 * metadataCache 优先，未就绪时读盘兜底；引用索引不可信（有文件读不到）时整体放弃删除
+	 * metadataCache first with a disk fallback; when the reference index is unreliable (some file
+	 * couldn't be read) the whole cleanup is abandoned instead of deleting anything
 	 */
 	private async cleanOrphanImages(imagePaths: string[], skipFile: string): Promise<void> {
+		if (imagePaths.length === 0) return;
+
 		const syncFolder = normalizePath(this.settings.syncFolder);
-		const mdPaths = (await this.listMdPathsInFolder(syncFolder)).filter(p => p !== skipFile);
+		const mdPaths = (await listMdPathsInFolder(this.vault, syncFolder)).filter(p => p !== skipFile);
 
 		const referencedFilenames = new Set<string>();
 		for (const path of mdPaths) {
-			const cache = this.app.metadataCache.getCache(path);
-			if (!cache) continue;
-
-			for (const embed of cache.embeds ?? []) {
-				referencedFilenames.add(embed.link.split('/').pop() ?? embed.link);
+			const names = await this.getReferencedNames(path);
+			if (names === null) {
+				console.warn(`ima.copilot Sync: 引用索引不可信，跳过本次孤儿图片清理 / Reference index unreliable, skipping orphan cleanup: ${path}`);
+				return;
 			}
-			for (const link of cache.links ?? []) {
-				if (link.original.startsWith('!') && !link.link.startsWith('http')) {
-					const decoded = link.link.split('/').map(s => decodeURIComponent(s)).join('/');
-					referencedFilenames.add(decoded.split('/').pop() ?? decoded);
-				}
-			}
+			for (const name of names) referencedFilenames.add(name);
 		}
 
 		for (const imgPath of imagePaths) {
@@ -1414,6 +1592,89 @@ export class SyncManager {
 				console.warn(`ima.copilot Sync: 清理孤儿图片失败 / Failed to clean orphan image ${imgPath}:`, err);
 			}
 		}
+	}
+
+	/**
+	 * 清理「原名-<同步标识后缀>」重复副本（命令入口）
+	 * Clean "<name>-<sync id suffix>" duplicate copies (command entry)
+	 */
+	async cleanupDuplicateCopies(): Promise<void> {
+		if (this.isSyncing) {
+			new Notice('🐼 ima.copilot sync: 同步正在进行中，请稍候');
+			return;
+		}
+
+		const syncFolder = normalizePath(this.settings.syncFolder);
+		const scan = await findDuplicateCopies(this.vault, syncFolder);
+
+		if (scan.pairs.length === 0) {
+			new Notice(`🐼 ima.copilot sync: 未发现可清理的重复副本（无主档 ${scan.unpaired.length}，正文不一致 ${scan.ambiguous.length}）`);
+			return;
+		}
+
+		console.debug(`ima.copilot Sync: 可清理的重复副本 / Cleanable duplicate copies:\n${scan.pairs.map(p => p.copyPath).join('\n')}`);
+		const sample = scan.pairs.slice(0, 10).map(p => p.copyPath).join('\n');
+		const more = scan.pairs.length > 10 ? `\n…等共 ${scan.pairs.length} 份` : '';
+		const skipped = scan.unpaired.length + scan.ambiguous.length;
+
+		new ConfirmModal(
+			this.app,
+			'清理重复副本？',
+			`发现 ${scan.pairs.length} 份「原名-同步标识后缀」副本，与主档标识相同且正文一致${skipped > 0 ? `（另有 ${skipped} 份疑似或正文不一致，将保留）` : ''}。\n以下文件将移入回收站：\n${sample}${more}`,
+			'移入回收站',
+			'取消',
+			() => void this.applyDuplicateCleanup(scan.pairs),
+			() => { /* 用户取消 / Cancelled by user */ },
+			() => { /* 用户直接关窗 / Dismissed */ },
+		).open();
+	}
+
+	/**
+	 * 执行重复副本回收：副本移入回收站，其专属附件随后按引用索引清理
+	 * Apply duplicate cleanup: trash the copies, then recycle their exclusive attachments
+	 */
+	private async applyDuplicateCleanup(pairs: DuplicatePair[]): Promise<void> {
+		this.refIndex.clear();
+		const opts = this.buildAttachmentOptions();
+		const attachmentCandidates = new Set<string>();
+		let removedNotes = 0;
+		let failed = 0;
+
+		for (const pair of pairs) {
+			const file = this.vault.getFileByPath(pair.copyPath);
+			if (!(file instanceof TFile)) continue;
+			try {
+				const content = await this.vault.read(file);
+				for (const p of this.imageHandler.extractLocalImagePaths(content, pair.copyPath, opts)) attachmentCandidates.add(p);
+				for (const p of this.imageHandler.extractLocalFilePaths(content, pair.copyPath, opts)) attachmentCandidates.add(p);
+				await this.app.fileManager.trashFile(file);
+				removedNotes++;
+			} catch (err) {
+				failed++;
+				console.warn(`ima.copilot Sync: 重复副本移入回收站失败 / Failed to trash duplicate copy ${pair.copyPath}:`, err);
+			}
+		}
+
+		// 统计候选附件在清理前的存在数量，清理后对比得出实际回收数
+		// Count candidates that exist before cleanup, then diff afterwards to report how many were recycled
+		const existingCandidates: string[] = [];
+		for (const candidate of attachmentCandidates) {
+			try {
+				if (await this.vault.adapter.exists(candidate)) existingCandidates.push(candidate);
+			} catch { /* 不存在则忽略 / Ignore when missing */ }
+		}
+		if (existingCandidates.length > 0) {
+			await this.cleanOrphanImages(existingCandidates, '');
+		}
+		let removedAttachments = 0;
+		for (const candidate of existingCandidates) {
+			try {
+				if (!(await this.vault.adapter.exists(candidate))) removedAttachments++;
+			} catch { /* 忽略 / Ignore */ }
+		}
+
+		const failedNote = failed > 0 ? `，${failed} 份失败（见控制台）` : '';
+		new Notice(`🐼 ima.copilot sync: 已清理 ${removedNotes} 份重复副本、${removedAttachments} 个重复附件${failedNote}`);
 	}
 
 }
