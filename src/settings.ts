@@ -1,4 +1,5 @@
-import { App, Modal, normalizePath, Platform, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, Modal, moment, normalizePath, Platform, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import type { SettingDefinition, SettingDefinitionItem, TextComponent } from 'obsidian';
 import { ImaClient, ImaPublicClient, formatImaError } from './ima-client';
 import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
 import { sanitizeFilename } from './path-utils';
@@ -97,6 +98,112 @@ export const DEFAULT_SETTINGS: ImaPluginSettings = {
 	downloadEnhanced: true,
 };
 
+// ─── 设置页描述模型 / Settings page description model ──────────────────────
+/**
+ * 设置页由一份描述（pageItems()）驱动，同时用于两条渲染路径：
+ * 1. Obsidian 1.13+ 的声明式设置页（getSettingDefinitions()，可被设置搜索检索）
+ * 2. 更早版本的 display() 回退渲染
+ *
+ * The settings page is driven by a single description (pageItems()) used by both
+ * render paths: the declarative settings page on Obsidian 1.13+ (indexed by the
+ * settings search) and the display() fallback for older versions.
+ */
+
+/** 标量设置键（经 getControlValue/setControlValue 读写）/ Scalar setting keys (read/written via getControlValue/setControlValue) */
+const SCALAR_KEYS = [
+	'syncNotes',
+	'syncKnowledgeBase',
+	'syncDeleteMode',
+	'downloadImages',
+	'imageSizeLimit',
+	'imageSizeLimitUnit',
+	'downloadFiles',
+	'fileSizeLimit',
+	'fileSizeLimitUnit',
+	'downloadEnhanced',
+	'syncFolder',
+	'syncIntervalMinutes',
+	'linkFormat',
+	'forceReadingMode',
+	'enableDebugLog',
+] as const;
+
+type ScalarKey = (typeof SCALAR_KEYS)[number];
+
+function isScalarKey(key: string): key is ScalarKey {
+	return SCALAR_KEYS.some(candidate => candidate === key);
+}
+
+/** 标量控件描述 / Scalar control description */
+type ControlSpec =
+	| { type: 'toggle'; key: ScalarKey; disabled?: () => boolean }
+	| { type: 'dropdown'; key: ScalarKey; options: Record<string, string>; defaultValue?: string }
+	| { type: 'text'; key: ScalarKey; placeholder?: string }
+	| { type: 'number'; key: ScalarKey; min?: number; placeholder?: string };
+
+/**
+ * 设置页条目 / Settings page item
+ *
+ * - row：普通设置行（名称/描述 + 控件），控件由 applyControl() 构建
+ * - block：整块自绘（凭证框、知识库选择框等），仍带 name/aliases 供设置搜索检索
+ */
+type PageItem =
+	| { kind: 'row'; name: string; desc: string; visible?: () => boolean; render: (setting: Setting, refresh: () => void) => void }
+	| { kind: 'block'; name: string; aliases?: string[]; searchable?: boolean; visible?: () => boolean; build: (containerEl: HTMLElement, refresh: () => void) => void };
+
+/** 下拉选项 / Dropdown options */
+const SIZE_UNIT_OPTIONS: Record<string, string> = { KB: 'KB', MB: 'MB', GB: 'GB' };
+
+const LINK_FORMAT_OPTIONS: Record<string, string> = {
+	auto: '跟随 Obsidian 设置',
+	wikilink: 'Obsidian 格式  ![[image.png]]',
+	markdown: 'Markdown 标准格式  ![alt](path)',
+};
+
+const DELETE_MODE_OPTIONS: Record<string, string> = {
+	delete: '删除本地文件',
+	keep: '保留本地文件',
+	'mark-deleted': '标记 [deleted]（保留文件，标题加后缀）',
+};
+
+/** 当前界面语言是否为中文（Obsidian 通过 moment 暴露语言）/ Whether the UI language is Chinese (Obsidian exposes the locale via moment) */
+function isChineseLocale(): boolean {
+	return moment.locale().toLowerCase().startsWith('zh');
+}
+
+/** 控件值 → 数字（非法值回退 0）/ Control value → number (invalid → 0) */
+function toNumber(value: unknown): number {
+	const num = typeof value === 'number' ? value : parseFloat(String(value));
+	return Number.isFinite(num) ? num : 0;
+}
+
+/** 控件值 → 非负大小限制 / Control value → non-negative size limit */
+function toSizeLimit(value: unknown): number {
+	return Math.max(0, toNumber(value));
+}
+
+/** 控件值 → 附件大小单位（非法值回退 MB）/ Control value → size unit (invalid → MB) */
+function toUnit(value: unknown): AttachmentSizeUnit {
+	return value === 'KB' || value === 'GB' ? value : 'MB';
+}
+
+/** 控件值 → 删除同步模式（非法值回退 delete）/ Control value → delete mode (invalid → delete) */
+function toDeleteMode(value: unknown): SyncDeleteMode {
+	return value === 'keep' || value === 'mark-deleted' ? value : 'delete';
+}
+
+/** 控件值 → 输入框显示文本（仅处理标量，其他回退默认值）/ Control value → input text (scalars only, otherwise the fallback) */
+function toDisplayText(value: unknown, fallback: string): string {
+	if (typeof value === 'string') return value;
+	if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+	return fallback;
+}
+
+/** 控件值 → 图片链接格式（非法值回退 auto）/ Control value → link format (invalid → auto) */
+function toLinkFormat(value: unknown): LinkFormat {
+	return value === 'wikilink' || value === 'markdown' ? value : 'auto';
+}
+
 // ─── 确认对话框（取消/删除知识库时询问是否清理本地文件）/ Confirm modal for KB removal ──
 
 export class ConfirmModal extends Modal {
@@ -164,32 +271,376 @@ interface SettingsHost {
 
 export class ImaSettingTab extends PluginSettingTab {
 	plugin: SettingsHost;
+	/**
+	 * 行可见性绑定（等价于声明式的 visible，但兼容 1.13 以下版本）
+	 * Row visibility bindings (equivalent to the declarative `visible`, but works below 1.13)
+	 */
+	private readonly visibilityBindings: Array<{ el: HTMLElement; visible: () => boolean }> = [];
+	/** 同步文件夹输入框（迁移失败时回滚显示）/ Sync folder input (reverted when migration fails) */
+	private syncFolderInput: TextComponent | null = null;
 
 	constructor(app: App, plugin: SettingsHost) {
 		super(app, plugin as unknown as Plugin);
 		this.plugin = plugin;
 	}
 
+	// ── 声明式设置页（Obsidian 1.13+）/ Declarative settings page (Obsidian 1.13+) ──
+
+	/**
+	 * 声明式设置页定义：1.13+ 由框架渲染，并用于设置搜索索引
+	 * Declarative settings definitions: rendered by the framework on 1.13+ and used for settings search
+	 *
+	 * 返回非空数组时 1.13+ 不再调用 display()，display() 仅作为旧版本回退保留
+	 * When a non-empty array is returned, display() is no longer called on 1.13+;
+	 * display() is kept only as the fallback for older versions
+	 */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		const refresh = (): void => this.applyVisibility();
+		// 重新渲染时丢弃上一轮的行绑定 / Drop the previous render's row bindings
+		this.visibilityBindings.length = 0;
+		return [
+			{
+				// 移动端提示（整块自绘，不参与搜索）/ Mobile notice (custom block, excluded from search)
+				name: '',
+				searchable: false,
+				render: setting => {
+					this.bindVisibility(setting.settingEl, () => !Platform.isDesktop);
+					this.renderAsBlock(setting, containerEl => this.renderMobileNotice(containerEl));
+				},
+			},
+			{
+				type: 'group',
+				heading: '同步设置',
+				items: this.pageItems().map(item => this.toDefinition(item, refresh)),
+			},
+		];
+	}
+
+	/** 把一个设置页条目转成声明式定义 / Convert a page item into a declarative definition */
+	private toDefinition(item: PageItem, refresh: () => void): SettingDefinition {
+		if (item.kind === 'row') {
+			return {
+				name: item.name,
+				desc: item.desc,
+				render: setting => {
+					if (item.visible) this.bindVisibility(setting.settingEl, item.visible);
+					item.render(setting, refresh);
+				},
+			};
+		}
+		return {
+			name: item.name,
+			aliases: item.aliases,
+			searchable: item.searchable,
+			render: setting => {
+				if (item.visible) this.bindVisibility(setting.settingEl, item.visible);
+				this.renderAsBlock(setting, containerEl => item.build(containerEl, refresh));
+			},
+		};
+	}
+
+	/**
+	 * 整块自绘：清掉框架生成的名称/描述占位，把整行交给插件自定义渲染
+	 * Take over a whole row: drop the framework's name/desc placeholders and render custom content
+	 */
+	private renderAsBlock(setting: Setting, build: (containerEl: HTMLElement) => void): void {
+		setting.settingEl.empty();
+		setting.settingEl.addClass('ima-settings-block');
+		build(setting.settingEl);
+	}
+
+	/**
+	 * 读取标量设置值（声明式控件与旧版渲染共用）
+	 * Read a scalar setting value (shared by the declarative controls and the legacy renderer)
+	 */
+	getControlValue(key: string): unknown {
+		if (!isScalarKey(key)) return undefined;
+		// 移动端不支持下载增强，界面显示为关闭 / Download enhancement is desktop-only, shown as off on mobile
+		if (key === 'downloadEnhanced' && !Platform.isDesktop) return false;
+		return this.plugin.settings[key];
+	}
+
+	/**
+	 * 写入并持久化标量设置值 / Write and persist a scalar setting value
+	 *
+	 * 覆盖基类实现：统一走 saveSettings()（含调试日志开关等副作用），
+	 * 并对同步文件夹迁移与枚举类取值做收敛
+	 * Overrides the base implementation so writes go through saveSettings()
+	 * (which applies side effects such as the debug-log toggle) and so the sync
+	 * folder migration and enum-like values are normalized
+	 */
+	async setControlValue(key: string, value: unknown): Promise<void> {
+		if (!isScalarKey(key)) return;
+		const settings = this.plugin.settings;
+
+		// 同步文件夹：先迁移文件再落盘，失败则回滚界面
+		// Sync folder: migrate files before persisting, revert the UI on failure
+		if (key === 'syncFolder') {
+			const newFolder = String(value).trim() || 'ima';
+			const oldFolder = settings.syncFolder;
+			if (newFolder === oldFolder) return;
+
+			try {
+				await this.plugin.migrateSyncFolder(oldFolder, newFolder);
+			} catch (err) {
+				new Notice(`文件夹迁移失败：${err instanceof Error ? err.message : String(err)}`);
+				this.syncFolderInput?.setValue(oldFolder);
+				return;
+			}
+
+			settings.syncFolder = newFolder;
+			await this.plugin.saveSettings();
+			new Notice(`同步文件夹已从 "${oldFolder}" 迁移至 "${newFolder}"`);
+			return;
+		}
+
+		switch (key) {
+			case 'syncNotes': settings.syncNotes = Boolean(value); break;
+			case 'syncKnowledgeBase': settings.syncKnowledgeBase = Boolean(value); break;
+			case 'syncDeleteMode': settings.syncDeleteMode = toDeleteMode(value); break;
+			case 'downloadImages': settings.downloadImages = Boolean(value); break;
+			case 'imageSizeLimit': settings.imageSizeLimit = toSizeLimit(value); break;
+			case 'imageSizeLimitUnit': settings.imageSizeLimitUnit = toUnit(value); break;
+			case 'downloadFiles': settings.downloadFiles = Boolean(value); break;
+			case 'fileSizeLimit': settings.fileSizeLimit = toSizeLimit(value); break;
+			case 'fileSizeLimitUnit': settings.fileSizeLimitUnit = toUnit(value); break;
+			case 'downloadEnhanced':
+				// 移动端不落盘（界面也不可编辑）/ Not persisted on mobile (the control is disabled there)
+				if (!Platform.isDesktop) return;
+				settings.downloadEnhanced = Boolean(value);
+				break;
+			case 'syncIntervalMinutes': settings.syncIntervalMinutes = Math.max(1, Math.round(toNumber(value))); break;
+			case 'linkFormat': settings.linkFormat = toLinkFormat(value); break;
+			case 'forceReadingMode': settings.forceReadingMode = Boolean(value); break;
+			case 'enableDebugLog': settings.enableDebugLog = Boolean(value); break;
+			default: return;
+		}
+
+		await this.plugin.saveSettings();
+	}
+
+	/**
+	 * 绑定一行/一块的可见性谓词，并立即应用一次
+	 * Bind a row/block visibility predicate and apply it once
+	 */
+	private bindVisibility(el: HTMLElement, visible: () => boolean): void {
+		this.visibilityBindings.push({ el, visible });
+		this.applyVisibility();
+	}
+
+	/**
+	 * 按谓词显隐所有已绑定的行/块（声明式与旧版共用；等价于声明式 visible）
+	 * Show/hide every bound row/block per its predicate (shared by both paths; mirrors the declarative `visible`)
+	 */
+	private applyVisibility(): void {
+		for (const binding of this.visibilityBindings) {
+			binding.el.toggleClass('ima-hidden', !binding.visible());
+		}
+	}
+
+	// ── 设置页描述 / Page description ────────────────────────────────────────
+
+	/**
+	 * 设置页条目（唯一的 UI 权威描述，两条渲染路径共用）
+	 * Settings page items — the single source of truth for both render paths
+	 */
+	private pageItems(): PageItem[] {
+		const settings = this.plugin.settings;
+		return [
+			// ── 认证凭证（灰色分组框）/ Credentials (grouped box) ──
+			{
+				kind: 'block',
+				name: '凭证与连接',
+				aliases: ['Client ID', 'API Key', '测试连接', 'ima OpenAPI', '凭证'],
+				build: containerEl => this.renderCredentialBlock(containerEl),
+			},
+
+			// ── 同步内容选择 / Sync content selection ──
+			this.controlRow('同步 ima 笔记', '同步 ima 个人笔记本中的笔记', { type: 'toggle', key: 'syncNotes' }),
+			this.controlRow('同步知识库', '同步知识库中的条目（支持笔记、网页、微信文章、PDF、Word 等多种类型）', { type: 'toggle', key: 'syncKnowledgeBase' }),
+			{
+				kind: 'block',
+				name: '选择要同步的知识库',
+				aliases: ['个人知识库', '订阅知识库', '公共知识库', 'shareId'],
+				visible: () => settings.syncKnowledgeBase,
+				build: containerEl => this.renderKnowledgeBaseBlock(containerEl),
+			},
+
+			// ── 删除同步 / Delete sync ──
+			this.controlRow('ima 删除同步', 'ima 笔记或知识库中删除条目后，本地文件的处理方式', {
+				type: 'dropdown',
+				key: 'syncDeleteMode',
+				options: DELETE_MODE_OPTIONS,
+			}),
+
+			// ── 附件下载 / Attachment downloads ──
+			this.controlRow('下载知识库图片', '个人笔记中的图片默认下载到本地（在线图片链接有时效签名，约 8 小时过期），此处仅控制知识库中的图片是否下载到本地', { type: 'toggle', key: 'downloadImages' }),
+			this.sizeLimitRow('图片大小限制', '超过限制的图片保留原始链接，不下载（0 = 不限制）', 'imageSizeLimit', 'imageSizeLimitUnit', () => settings.downloadImages),
+			this.controlRow('下载知识库文件', '个人笔记中的文件默认下载到本地（在线文件链接有时效签名，约 8 小时过期），此处仅控制知识库中的 docx、PDF 等文件是否下载到本地', { type: 'toggle', key: 'downloadFiles' }),
+			this.sizeLimitRow('文件大小限制', '超过限制的文件保留原始链接，不下载（0 = 不限制）', 'fileSizeLimit', 'fileSizeLimitUnit', () => settings.downloadFiles),
+			this.controlRow('下载增强（仅限桌面端）', '对防盗链图片/文件和微信公众号内容非常有效。开启后下载失败时自动使用 Node.js 回退重试；微信文章直接使用无头浏览器渲染提取完整内容（不再尝试静态抓取）', {
+				type: 'toggle',
+				key: 'downloadEnhanced',
+				disabled: () => !Platform.isDesktop,
+			}),
+
+			// ── 同步设置 / Sync settings ──
+			this.controlRow('同步文件夹', '笔记同步到 vault 根目录下的文件夹名（默认：ima）。修改后会自动迁移现有文件。', { type: 'text', key: 'syncFolder', placeholder: 'ima' }),
+			this.controlRow('同步间隔（分钟）', '自动同步的时间间隔，最小 1 分钟', { type: 'number', key: 'syncIntervalMinutes', min: 1, placeholder: '60' }),
+			this.controlRow('图片引用格式', '同步后笔记中图片链接的格式', { type: 'dropdown', key: 'linkFormat', options: LINK_FORMAT_OPTIONS }),
+			this.controlRow('强制阅读模式', 'ima 同步文件默认以阅读模式打开，防止误编辑被同步覆盖', { type: 'toggle', key: 'forceReadingMode' }),
+
+			// ── 手动同步 / Manual sync ──
+			{ kind: 'row', name: '立即同步', desc: '手动触发一次全量同步', render: setting => this.renderManualSyncButton(setting) },
+
+			// ── 调试日志 / Debug log ──
+			this.controlRow('输出调试日志', '将 API 请求和响应记录到插件目录下的 ima-debug.log 文件（默认关闭，排查问题时开启）', { type: 'toggle', key: 'enableDebugLog' }),
+		];
+	}
+
+	/** 生成标量设置行 / Build a scalar settings row */
+	private controlRow(name: string, desc: string, control: ControlSpec, visible?: () => boolean): PageItem {
+		return {
+			kind: 'row',
+			name,
+			desc,
+			visible,
+			render: (setting, refresh) => this.applyControl(setting, control, refresh),
+		};
+	}
+
+	/** 生成「大小限制 + 单位」行（同一行内文本输入 + 下拉，与原 UI 一致）/ Build a size-limit row (input + unit dropdown on one row, as before) */
+	private sizeLimitRow(name: string, desc: string, limitKey: ScalarKey, unitKey: ScalarKey, visible: () => boolean): PageItem {
+		return {
+			kind: 'row',
+			name,
+			desc,
+			visible,
+			render: (setting, refresh) => {
+				this.applyControl(setting, { type: 'number', key: limitKey, min: 0, placeholder: '0' }, refresh);
+				this.applyControl(setting, { type: 'dropdown', key: unitKey, options: SIZE_UNIT_OPTIONS }, refresh);
+			},
+		};
+	}
+
+	/** 立即同步按钮 / Manual sync button */
+	private renderManualSyncButton(setting: Setting): void {
+		setting.addButton(btn =>
+			btn
+				.setButtonText('立即同步')
+				.onClick(async () => {
+					this.plugin.settings.lastSyncTime = 0;
+					await this.plugin.saveSettings();
+					await this.plugin.triggerSync();
+				}),
+		);
+	}
+
+	/**
+	 * 在设置行上构建标量控件，读写统一走 getControlValue/setControlValue
+	 * Build a scalar control on a settings row; reads/writes always go through getControlValue/setControlValue
+	 */
+	private applyControl(setting: Setting, control: ControlSpec, refresh: () => void): void {
+		const current = this.getControlValue(control.key);
+		const apply = (value: unknown): void => {
+			void Promise.resolve(this.setControlValue(control.key, value)).then(refresh);
+		};
+
+		if (control.type === 'toggle') {
+			const disabled = control.disabled?.() ?? false;
+			setting.addToggle(toggle => {
+				toggle.setValue(Boolean(current)).setDisabled(disabled);
+				// 移动端禁用时不注册变更回调，避免误写入 / Skip the change handler when disabled to avoid writes
+				if (!disabled) toggle.onChange(value => apply(value));
+			});
+			return;
+		}
+
+		if (control.type === 'dropdown') {
+			const options = control.options;
+			setting.addDropdown(drop => {
+				for (const value of Object.keys(options)) drop.addOption(value, options[value] ?? value);
+				drop.setValue(toDisplayText(current, control.defaultValue ?? ''));
+				drop.onChange(value => apply(value));
+			});
+			return;
+		}
+
+		if (control.type === 'text') {
+			setting.addText(text => {
+				text.setPlaceholder(control.placeholder ?? '');
+				text.setValue(toDisplayText(current, ''));
+				// 记录同步文件夹输入框，迁移失败时回滚显示 / Keep the sync-folder input to revert it when migration fails
+				if (control.key === 'syncFolder') this.syncFolderInput = text;
+				text.onChange(value => apply(value));
+			});
+			return;
+		}
+
+		setting.addText(text => {
+			text.setPlaceholder(control.placeholder ?? '0');
+			text.setValue(toDisplayText(current, '0'));
+			text.onChange(value => apply(value));
+		});
+	}
+
+	// ── 旧版回退渲染（Obsidian < 1.13）/ Legacy fallback renderer (Obsidian < 1.13) ──
+
+	/**
+	 * 旧版 Obsidian 的渲染入口：按同一份描述构建界面
+	 * Legacy render entry point: builds the same page from the same description
+	 *
+	 * 1.13+ 返回非空的 getSettingDefinitions() 后此方法不再被调用
+	 * Not called on 1.13+, where the non-empty getSettingDefinitions() takes over
+	 */
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		// ── 移动端提示（非桌面端显示）/ Mobile notice (shown on non-desktop) ──
+		// 可见性绑定在 1.13+ 由框架触发的渲染中同样使用 / Visibility bindings are shared with the declarative render path
+		this.visibilityBindings.length = 0;
+		const refresh = (): void => this.applyVisibility();
+
 		if (!Platform.isDesktop) {
-			const noticeBox = containerEl.createDiv({ cls: 'ima-mobile-notice' });
+			this.renderMobileNotice(containerEl);
+		}
+
+		new Setting(containerEl).setName('同步设置').setHeading();
+
+		for (const item of this.pageItems()) {
+			if (item.kind === 'row') {
+				const setting = new Setting(containerEl).setName(item.name).setDesc(item.desc);
+				if (item.visible) this.bindVisibility(setting.settingEl, item.visible);
+				item.render(setting, refresh);
+				continue;
+			}
+			const wrapper = containerEl.createDiv();
+			if (item.visible) this.bindVisibility(wrapper, item.visible);
+			item.build(wrapper, refresh);
+		}
+
+		refresh();
+	}
+
+	// ── 自绘内容块 / Custom blocks ──────────────────────────────────────────
+
+	/** 移动端提示块（按界面语言只显示对应文案）/ Mobile notice block (renders only the text matching the UI language) */
+	private renderMobileNotice(containerEl: HTMLElement): void {
+		const noticeBox = containerEl.createDiv({ cls: 'ima-mobile-notice' });
+		if (isChineseLocale()) {
 			noticeBox.createEl('p', {
 				text: '📢 强烈建议在桌面端使用。桌面端独有的「下载增强」功能可显著提升微信公众号内容和防盗链图片的下载成功率。',
 			});
+		} else {
 			noticeBox.createEl('p', {
 				text: '📢 Strongly recommended to use on desktop. The desktop-exclusive "Download Enhancement" feature significantly improves the download success rate for WeChat public account content and anti-hotlink images.',
 				cls: 'ima-mobile-notice--en',
 			});
 		}
+	}
 
-		new Setting(containerEl).setName('同步设置').setHeading();
-
-		// ── 认证凭证（灰色分组框）/ Credentials (grouped box) ─────────────────
-
+	/** 凭证块（说明 + 一键粘贴 + Client ID / API Key + 测试连接）/ Credential block */
+	private renderCredentialBlock(containerEl: HTMLElement): void {
 		const credBox = containerEl.createDiv({ cls: 'ima-cred-box' });
 
 		// ── 凭证获取说明 + 一键粘贴 / Credential instructions + paste button ──
@@ -248,11 +699,14 @@ export class ImaSettingTab extends PluginSettingTab {
 							this.app.secretStorage.setSecret(SECRET_ID_API_KEY, apiKeyMatch[1]?.trim() ?? '');
 						}
 
-						this.display();
+						// 直接刷新输入框，避免整体重渲染 / Refresh the inputs in place instead of re-rendering the tab
+						if (clientIdMatch) clientIdInput?.setValue(clientIdMatch[1]?.trim() ?? '');
+						if (apiKeyMatch) apiKeyInput?.setValue(apiKeyMatch[1]?.trim() ?? '');
 						new Notice('凭证已配置至安全存储');
 					}),
 			);
 
+		let clientIdInput: TextComponent | null = null;
 		new Setting(credBox)
 			.setName('Client ID')
 			.setDesc('ima OpenAPI 的 Client ID（安全存储于 Obsidian 钥匙串）')
@@ -264,8 +718,10 @@ export class ImaSettingTab extends PluginSettingTab {
 						this.app.secretStorage.setSecret(SECRET_ID_CLIENT, value.trim());
 					});
 				text.inputEl.addClass('ima-input-wide');
+				clientIdInput = text;
 			});
 
+		let apiKeyInput: TextComponent | null = null;
 		new Setting(credBox)
 			.setName('API Key')
 			.setDesc('ima OpenAPI 的 API Key（安全存储于 Obsidian 钥匙串）')
@@ -278,6 +734,7 @@ export class ImaSettingTab extends PluginSettingTab {
 					});
 				text.inputEl.type = 'password';
 				text.inputEl.addClass('ima-input-wide');
+				apiKeyInput = text;
 			});
 
 		// ── 测试连接 / Test connection ──────────────────────────────────────
@@ -317,41 +774,14 @@ export class ImaSettingTab extends PluginSettingTab {
 						}
 					}),
 			);
+	}
 
-		// ── 同步内容选择 / Sync content selection ──────────────────────────────
-
-		new Setting(containerEl)
-			.setName('同步 ima 笔记')
-			.setDesc('同步 ima 个人笔记本中的笔记')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.syncNotes)
-					.onChange(async value => {
-						this.plugin.settings.syncNotes = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName('同步知识库')
-			.setDesc('同步知识库中的条目（支持笔记、网页、微信文章、PDF、Word 等多种类型）')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.syncKnowledgeBase)
-					.onChange(async value => {
-						this.plugin.settings.syncKnowledgeBase = value;
-						await this.plugin.saveSettings();
-						kbBox.toggleClass('ima-hidden', !value);
-					}),
-			);
-
-		// ── 知识库分组框（受开关控制显隐）/ KB group box (visibility controlled by toggle) ──
-
+	/**
+	 * 知识库选择块（个人 + 订阅 + 手动添加公共知识库）
+	 * Knowledge base selection block (personal + subscribed + manually added public KB)
+	 */
+	private renderKnowledgeBaseBlock(containerEl: HTMLElement): void {
 		const kbBox = containerEl.createDiv({ cls: 'ima-kb-box' });
-
-		if (!this.plugin.settings.syncKnowledgeBase) {
-			kbBox.addClass('ima-hidden');
-		}
 
 		// ── 知识库选择（个人 + 订阅）/ KB selection (personal + subscribed) ──
 
@@ -670,222 +1100,5 @@ export class ImaSettingTab extends PluginSettingTab {
 			}
 		};
 		renderPublicKbList();
-
-		// ── ima 删除同步 / ima delete sync ──────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('ima 删除同步')
-			.setDesc('ima 笔记或知识库中删除条目后，本地文件的处理方式')
-			.addDropdown(drop => {
-				drop
-					.addOption('delete', '删除本地文件')
-					.addOption('keep', '保留本地文件')
-					.addOption('mark-deleted', '标记 [deleted]（保留文件，标题加后缀）')
-					.setValue(this.plugin.settings.syncDeleteMode)
-					.onChange(async value => {
-						this.plugin.settings.syncDeleteMode = value as SyncDeleteMode;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		// ── 附件下载设置 / Attachment download settings ──────────────────────
-
-		this.addDownloadToggleWithSizeLimit(containerEl, {
-			toggleName: '下载知识库图片',
-			toggleDesc: '个人笔记中的图片默认下载到本地（在线图片链接有时效签名，约 8 小时过期），此处仅控制知识库中的图片是否下载到本地',
-			limitName: '图片大小限制',
-			limitDesc: '超过限制的图片保留原始链接，不下载（0 = 不限制）',
-			toggleKey: 'downloadImages',
-			limitKey: 'imageSizeLimit',
-			unitKey: 'imageSizeLimitUnit',
-		});
-
-		this.addDownloadToggleWithSizeLimit(containerEl, {
-			toggleName: '下载知识库文件',
-			toggleDesc: '个人笔记中的文件默认下载到本地（在线文件链接有时效签名，约 8 小时过期），此处仅控制知识库中的 docx、PDF 等文件是否下载到本地',
-			limitName: '文件大小限制',
-			limitDesc: '超过限制的文件保留原始链接，不下载（0 = 不限制）',
-			toggleKey: 'downloadFiles',
-			limitKey: 'fileSizeLimit',
-			unitKey: 'fileSizeLimitUnit',
-		});
-
-		// ── 下载增强（仅桌面端）/ Download enhancement (desktop only) ──────────
-
-		new Setting(containerEl)
-			.setName('下载增强（仅限桌面端）')
-			.setDesc('对防盗链图片/文件和微信公众号内容非常有效。开启后下载失败时自动使用 Node.js 回退重试；微信文章直接使用无头浏览器渲染提取完整内容（不再尝试静态抓取）')
-			.addToggle(toggle => {
-				toggle
-					.setValue(Platform.isDesktop ? this.plugin.settings.downloadEnhanced : false)
-					.setDisabled(!Platform.isDesktop)
-					.onChange(async value => {
-						this.plugin.settings.downloadEnhanced = value;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		// ── 同步设置 / Sync settings ─────────────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('同步文件夹')
-			.setDesc('笔记同步到 vault 根目录下的文件夹名（默认：ima）。修改后会自动迁移现有文件。')
-			.addText(text =>
-				text
-					.setPlaceholder('ima')
-					.setValue(this.plugin.settings.syncFolder)
-					.onChange(async value => {
-						const newFolder = value.trim() || 'ima';
-						const oldFolder = this.plugin.settings.syncFolder;
-						if (newFolder === oldFolder) return;
-
-						try {
-							await this.plugin.migrateSyncFolder(oldFolder, newFolder);
-						} catch (err) {
-							new Notice(`文件夹迁移失败：${err instanceof Error ? err.message : String(err)}`);
-							text.setValue(oldFolder);
-							return;
-						}
-
-						this.plugin.settings.syncFolder = newFolder;
-						await this.plugin.saveSettings();
-						new Notice(`同步文件夹已从 "${oldFolder}" 迁移至 "${newFolder}"`);
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName('同步间隔（分钟）')
-			.setDesc('自动同步的时间间隔，最小 1 分钟')
-			.addText(text =>
-				text
-					.setPlaceholder('60')
-					.setValue(String(this.plugin.settings.syncIntervalMinutes))
-					.onChange(async value => {
-						const minutes = parseInt(value, 10);
-						if (!isNaN(minutes) && minutes >= 1) {
-							this.plugin.settings.syncIntervalMinutes = minutes;
-							await this.plugin.saveSettings();
-						}
-					}),
-			);
-
-		// ── 图片链接格式 / Image link format ─────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('图片引用格式')
-			.setDesc('同步后笔记中图片链接的格式')
-			.addDropdown(drop => {
-				drop
-					.addOption('auto', '跟随 Obsidian 设置')
-					.addOption('wikilink', 'Obsidian 格式  ![[image.png]]')
-					.addOption('markdown', 'Markdown 标准格式  ![alt](path)')
-					.setValue(this.plugin.settings.linkFormat)
-					.onChange(async value => {
-						this.plugin.settings.linkFormat = value as LinkFormat;
-						await this.plugin.saveSettings();
-					});
-			});
-
-		// ── 强制阅读模式 / Force reading mode ───────────────────────────────
-
-		new Setting(containerEl)
-			.setName('强制阅读模式')
-			.setDesc('ima 同步文件默认以阅读模式打开，防止误编辑被同步覆盖')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.forceReadingMode)
-					.onChange(async value => {
-						this.plugin.settings.forceReadingMode = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		// ── 手动同步 / Manual sync ──────────────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('立即同步')
-			.setDesc('手动触发一次全量同步')
-			.addButton(btn =>
-				btn
-					.setButtonText('立即同步')
-					.onClick(async () => {
-						this.plugin.settings.lastSyncTime = 0;
-						await this.plugin.saveSettings();
-						await this.plugin.triggerSync();
-					}),
-			);
-
-		// ── 调试日志 / Debug log ─────────────────────────────────────────────
-
-		new Setting(containerEl)
-			.setName('输出调试日志')
-			.setDesc('将 API 请求和响应记录到插件目录下的 ima-debug.log 文件（默认关闭，排查问题时开启）')
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings.enableDebugLog)
-					.onChange(async value => {
-						this.plugin.settings.enableDebugLog = value;
-						await this.plugin.saveSettings();
-					}),
-			);
-	}
-	private addDownloadToggleWithSizeLimit(
-		containerEl: HTMLElement,
-		config: {
-			toggleName: string;
-			toggleDesc: string;
-			limitName: string;
-			limitDesc: string;
-			toggleKey: 'downloadImages' | 'downloadFiles';
-			limitKey: 'imageSizeLimit' | 'fileSizeLimit';
-			unitKey: 'imageSizeLimitUnit' | 'fileSizeLimitUnit';
-		},
-	): void {
-		let limitContainer: HTMLDivElement | null = null;
-
-		new Setting(containerEl)
-			.setName(config.toggleName)
-			.setDesc(config.toggleDesc)
-			.addToggle(toggle =>
-				toggle
-					.setValue(this.plugin.settings[config.toggleKey])
-					.onChange(async value => {
-						this.plugin.settings[config.toggleKey] = value;
-						await this.plugin.saveSettings();
-						if (limitContainer) {
-							limitContainer.toggleClass('ima-hidden', !value);
-						}
-					}),
-		);
-
-		limitContainer = containerEl.createDiv();
-		if (!this.plugin.settings[config.toggleKey]) {
-			limitContainer.addClass('ima-hidden');
-		}
-
-		new Setting(limitContainer)
-			.setName(config.limitName)
-			.setDesc(config.limitDesc)
-			.addText(text =>
-				text
-					.setPlaceholder('0')
-					.setValue(String(this.plugin.settings[config.limitKey]))
-					.onChange(async value => {
-						const num = parseFloat(value);
-						this.plugin.settings[config.limitKey] = isNaN(num) ? 0 : Math.max(0, num);
-						await this.plugin.saveSettings();
-					}),
-			)
-			.addDropdown(drop =>
-				drop
-					.addOption('KB', 'KB')
-					.addOption('MB', 'MB')
-					.addOption('GB', 'GB')
-					.setValue(this.plugin.settings[config.unitKey])
-					.onChange(async value => {
-						this.plugin.settings[config.unitKey] = value as AttachmentSizeUnit;
-						await this.plugin.saveSettings();
-					}),
-		);
 	}
 }

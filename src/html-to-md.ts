@@ -535,7 +535,8 @@ function buildCleanWeChatDom(doc: Document): Document {
 			const lines = codeEls.map(c => c.textContent || '');
 			const lang = pre.getAttribute('data-lang') || '';
 			pre.innerHTML = '';
-			const newCode = pre.ownerDocument.createElement('code');
+			// 用 Obsidian DOM 助手创建（官方扫描要求）/ Use the Obsidian DOM helper (required by the official scan)
+			const newCode = createEl('code');
 			if (lang) newCode.className = `language-${lang}`;
 			newCode.textContent = lines.join('\n');
 			pre.appendChild(newCode);
@@ -948,7 +949,8 @@ function buildCleanWeChatHtml(el: HTMLElement, doc: Document): string {
 			const lines = codeEls.map(c => c.textContent || '');
 			const lang = pre.getAttribute('data-lang') || '';
 			pre.innerHTML = '';
-			const newCode = doc.createElement('code');
+			// 用 Obsidian DOM 助手创建（官方扫描要求）/ Use the Obsidian DOM helper (required by the official scan)
+			const newCode = createEl('code');
 			if (lang) newCode.className = `language-${lang}`;
 			newCode.textContent = lines.join('\n');
 			pre.appendChild(newCode);
@@ -1552,8 +1554,9 @@ function normalizeTableCodeBlocks(doc: Document): void {
 		if (!isCodeLike(codeText)) return;
 		if (!codeText.trim()) return;
 
-		const pre = doc.createElement('pre');
-		const code = doc.createElement('code');
+		// 用 Obsidian DOM 助手创建（官方扫描要求）/ Use the Obsidian DOM helpers (required by the official scan)
+		const pre = createEl('pre');
+		const code = createEl('code');
 		code.textContent = codeText;
 		pre.appendChild(code);
 		table.replaceWith(pre);
@@ -1637,7 +1640,8 @@ function preprocessAnswer(doc: Document, bodyText?: string): void {
 	if (answerContent) {
 		// 从 js-initialData 拼接正文时间行 / Append body time text from SSR
 		if (bodyText) {
-			const timeSpan = doc.createElement('span');
+			// 用 Obsidian DOM 助手创建（官方扫描要求）/ Use the Obsidian DOM helper (required by the official scan)
+			const timeSpan = createSpan();
 			timeSpan.textContent = bodyText;
 			answerContent.appendChild(timeSpan);
 		}

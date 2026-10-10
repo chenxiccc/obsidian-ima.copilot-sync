@@ -133,6 +133,54 @@
 	display: none;
 }
 
+/* 凭证框 / 知识库框内的设置行：按「名称 → 描述 → 控件」纵向排列（与 1.13+ 原生设置行一致），
+   控件左对齐、输入框占满整行，左边缘与上方文字对齐
+   Rows inside the credential / KB boxes stack vertically (name → description → control, matching
+   native 1.13+ rows); the control is left-aligned and inputs span the row, so the input's left edge
+   lines up with the text above. */
+.ima-cred-box .setting-item,
+.ima-kb-box .setting-item {
+	flex-direction: column;
+}
+
+.ima-cred-box .setting-item-info,
+.ima-kb-box .setting-item-info {
+	align-self: stretch;
+	min-width: 0;
+	margin-inline-end: 0;
+}
+
+.ima-cred-box .setting-item-control,
+.ima-kb-box .setting-item-control {
+	width: 100%;
+	max-width: 100%;
+	justify-content: flex-start;
+}
+
+.ima-cred-box .setting-item-control input,
+.ima-kb-box .setting-item-control input {
+	width: 100%;
+	max-width: 100%;
+}
+
+/* 声明式设置页中「整块自绘」的行（凭证框 / 知识库框 / 移动端提示）：
+   去掉行框架的边框与内边距，让块内自带的分组框样式生效
+   "Fully custom" rows in the declarative settings page (credential box / KB box / mobile
+   notice): drop the row frame's border and padding so the inner box styling applies */
+.setting-item.ima-settings-block {
+	display: block;
+	border-top: none;
+	padding: 0;
+}
+
+/* 上面的 display:block 特异性高于 .ima-hidden（0,2,0 > 0,1,0），
+   会让「隐藏」失效（桌面端移动提示、关闭开关后的知识库框都会继续显示），此处补回
+   The rule above out-specifies .ima-hidden (0,2,0 > 0,1,0), which would break hiding
+   (desktop mobile-notice, KB box when its toggle is off); restore it here. */
+.setting-item.ima-settings-block.ima-hidden {
+	display: none;
+}
+
 /* ── 移动端提示框（设置页顶部，仅非桌面端显示）/ Mobile notice box (top of settings page, non-desktop only) ── */
 .ima-mobile-notice {
 	background: var(--background-secondary);
