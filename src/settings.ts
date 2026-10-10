@@ -1,4 +1,4 @@
-import { App, Modal, moment, normalizePath, Platform, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { App, Modal, normalizePath, Platform, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import type { SettingDefinition, SettingDefinitionItem, TextComponent } from 'obsidian';
 import { ImaClient, ImaPublicClient, formatImaError } from './ima-client';
 import type { SearchedKnowledgeBase, PublicKnowledgeBase } from './ima-client';
@@ -166,11 +166,6 @@ const DELETE_MODE_OPTIONS: Record<string, string> = {
 	'mark-deleted': '标记 [deleted]（保留文件，标题加后缀）',
 };
 
-/** 当前界面语言是否为中文（Obsidian 通过 moment 暴露语言）/ Whether the UI language is Chinese (Obsidian exposes the locale via moment) */
-function isChineseLocale(): boolean {
-	return moment.locale().toLowerCase().startsWith('zh');
-}
-
 /** 控件值 → 数字（非法值回退 0）/ Control value → number (invalid → 0) */
 function toNumber(value: unknown): number {
 	const num = typeof value === 'number' ? value : parseFloat(String(value));
@@ -300,11 +295,13 @@ export class ImaSettingTab extends PluginSettingTab {
 		this.visibilityBindings.length = 0;
 		return [
 			{
-				// 移动端提示（整块自绘，不参与搜索）/ Mobile notice (custom block, excluded from search)
+				// 顶部说明（整块自绘，不参与搜索）/ Top notice (custom block, excluded from search)
 				name: '',
 				searchable: false,
 				render: setting => {
-					this.bindVisibility(setting.settingEl, () => !Platform.isDesktop);
+					// 标记说明所在的隐式分组卡片，去掉它的底色/边框，避免说明框外多一圈灰底
+					// Mark the implicit group card holding the notice so CSS can strip its fill/border
+					setting.settingEl.closest<HTMLElement>('.setting-items')?.addClass('ima-notice-card');
 					this.renderAsBlock(setting, containerEl => this.renderMobileNotice(containerEl));
 				},
 			},
@@ -601,9 +598,7 @@ export class ImaSettingTab extends PluginSettingTab {
 		this.visibilityBindings.length = 0;
 		const refresh = (): void => this.applyVisibility();
 
-		if (!Platform.isDesktop) {
-			this.renderMobileNotice(containerEl);
-		}
+		this.renderMobileNotice(containerEl);
 
 		new Setting(containerEl).setName('同步设置').setHeading();
 
@@ -624,19 +619,12 @@ export class ImaSettingTab extends PluginSettingTab {
 
 	// ── 自绘内容块 / Custom blocks ──────────────────────────────────────────
 
-	/** 移动端提示块（按界面语言只显示对应文案）/ Mobile notice block (renders only the text matching the UI language) */
+	/** 顶部说明块（仅中文，插件未做多语言适配）/ Top notice block (Chinese only; the plugin has no i18n) */
 	private renderMobileNotice(containerEl: HTMLElement): void {
-		const noticeBox = containerEl.createDiv({ cls: 'ima-mobile-notice' });
-		if (isChineseLocale()) {
-			noticeBox.createEl('p', {
-				text: '📢 强烈建议在桌面端使用。桌面端独有的「下载增强」功能可显著提升微信公众号内容和防盗链图片的下载成功率。',
-			});
-		} else {
-			noticeBox.createEl('p', {
-				text: '📢 Strongly recommended to use on desktop. The desktop-exclusive "Download Enhancement" feature significantly improves the download success rate for WeChat public account content and anti-hotlink images.',
-				cls: 'ima-mobile-notice--en',
-			});
-		}
+		const noticeBox = containerEl.createDiv({ cls: 'ima-notice-box' });
+		noticeBox.createEl('p', {
+			text: '📢 强烈建议在桌面端使用。桌面端独有的「下载增强」功能可显著提升微信公众号内容和防盗链图片的下载成功率。',
+		});
 	}
 
 	/** 凭证块（说明 + 一键粘贴 + Client ID / API Key + 测试连接）/ Credential block */

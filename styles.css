@@ -163,42 +163,62 @@
 	max-width: 100%;
 }
 
-/* 声明式设置页中「整块自绘」的行（凭证框 / 知识库框 / 移动端提示）：
-   去掉行框架的边框与内边距，让块内自带的分组框样式生效
-   "Fully custom" rows in the declarative settings page (credential box / KB box / mobile
-   notice): drop the row frame's border and padding so the inner box styling applies */
+/* 声明式设置页中「整块自绘」的行（凭证框 / 知识库框 / 顶部说明）：
+   去掉行框架的边框、内边距与底色，让块内自带的分组框/说明框样式生效。
+   选择器需要压过 Obsidian 的 `.setting-group .setting-item:not(...)`（0,3,0），
+   否则行会保留 16px 内边距（说明框描边外出现一大圈空白）
+   Custom rows: drop the row frame's border, padding and background so the inner box styles apply.
+   This must out-specify Obsidian's `.setting-group .setting-item:not(...)` (0,3,0); otherwise the
+   row keeps its 16px padding and a large gap shows around the notice outline. */
+.setting-group .setting-items > .setting-item.ima-settings-block {
+	display: block;
+	border: none;
+	padding: 0;
+	background-color: transparent;
+}
+
+/* 兜底：不在分组内的自绘行 / Fallback for custom rows outside a group */
 .setting-item.ima-settings-block {
 	display: block;
 	border-top: none;
 	padding: 0;
+	background-color: transparent;
 }
 
-/* 上面的 display:block 特异性高于 .ima-hidden（0,2,0 > 0,1,0），
-   会让「隐藏」失效（桌面端移动提示、关闭开关后的知识库框都会继续显示），此处补回
-   The rule above out-specifies .ima-hidden (0,2,0 > 0,1,0), which would break hiding
-   (desktop mobile-notice, KB box when its toggle is off); restore it here. */
+/* 上面第一条特异性高于 .ima-hidden（0,4,0 > 0,1,0），会让「隐藏」失效
+   （关闭「同步知识库」后知识库框仍显示），这里用更高特异性补回
+   The first rule out-specifies .ima-hidden (0,4,0 > 0,1,0), which would break hiding
+   (the KB box stayed visible after turning the toggle off); restore it here. */
+.setting-group .setting-items > .setting-item.ima-settings-block.ima-hidden,
 .setting-item.ima-settings-block.ima-hidden {
 	display: none;
 }
 
-/* ── 移动端提示框（设置页顶部，仅非桌面端显示）/ Mobile notice box (top of settings page, non-desktop only) ── */
-.ima-mobile-notice {
-	background: var(--background-secondary);
+/* 顶部说明所在的隐式分组卡片：不画底色与边框，只保留说明框自身的描边
+   （Obsidian 会为一个裸定义单独建一张分组卡片，深色主题下表现为说明框外的一圈灰底）
+   The implicit group card that wraps the notice definition: no fill, no border — only the
+   notice's own outline remains (Obsidian wraps a bare definition in its own card, which shows
+   as a grey box around the notice in dark themes). */
+.setting-group .setting-items.ima-notice-card {
+	background-color: transparent;
+	border: none;
+}
+
+/* ── 顶部说明框（设置页顶部）：只描边，不填底色
+   （深色主题下 var(--background-secondary) 会显示成黑色底框）
+   Top notice box (top of the settings page): outline only, no fill
+   (in dark themes var(--background-secondary) renders as a black box) ── */
+.ima-notice-box {
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	padding: 12px 16px;
 	margin-bottom: 16px;
 }
 
-.ima-mobile-notice p {
+.ima-notice-box p {
 	margin: 0;
 	font-size: 0.9em;
 	line-height: 1.5;
-}
-
-.ima-mobile-notice--en {
-	margin-top: 6px;
-	color: var(--text-muted);
 }
 
 /* ── Ribbon 同步图标：空闲 panda / 同步 refresh-cw 旋转 / Ribbon icon: panda idle / refresh-cw spinning when syncing ── */
