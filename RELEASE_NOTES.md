@@ -17,6 +17,10 @@
 
 - 命令「清理重复副本（同名-同步标识后缀）」：扫描「原名-<同步标识末12位>」且与主档标识相同、去 frontmatter/链接目标/空白后正文一致的副本，确认后移入回收站并回收其专属附件；有正文差异或无主档的副本只报告不删除
 
+### 内部
+
+- **通过 Obsidian 官方审核扫描**：`html-to-md.ts` 5 处原生 `document.createElement` 改用 Obsidian DOM 助手（`createEl` / `createSpan`）；设置页实现声明式设置定义 `getSettingDefinitions()`（设置搜索可检索全部设置项），`display()` 保留为 Obsidian < 1.13 的回退渲染，`minAppVersion` 维持 1.11.4
+
 ## 6.6.0
 
 ### 修复
